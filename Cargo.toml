@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 crossterm = "0.27"
 arboard = "3.2"
+discord-rich-presence = "0.2"
 
 [build-dependencies]
 winres = "0.1"

@@ -6,6 +6,19 @@ A lightweight, fast, and distraction-free terminal-based code editor written in 
 ![Platform](https://img.shields.io/badge/Platform-Windows-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
+## Features
+
+- 🎮 **Discord Rich Presence** - Show what you're editing in Discord
+- 📁 File tree navigation
+- 🔍 Search & Go to line
+- ✂️ Copy/Cut/Paste with system clipboard
+- ↩️ Undo/Redo support
+- 🎨 Syntax highlighting for Rust, JavaScript, Python, C, C++, Java
+- 🖱️ Mouse support (click, drag, scroll)
+- 💡 Auto-completion
+- 🔲 Bracket matching
+- 📟 Built-in terminal
+
 ## Keyboard Shortcuts
 
 | Shortcut | Action |

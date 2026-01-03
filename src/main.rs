@@ -5,13 +5,17 @@ use crossterm::{
     style::{Attribute, Color, SetAttribute, SetForegroundColor},
     terminal,
 };
+use discord_rich_presence::{
+    activity::{Activity, Timestamps},
+    DiscordIpc, DiscordIpcClient,
+};
 use std::{
     collections::{HashMap, HashSet},
     env,
     fs,
     io::{self, Read, Write},
     path::PathBuf,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 const STATUS_HEIGHT: u16 = 1;
@@ -252,6 +256,10 @@ struct Editor {
     autocomplete_suggestions: Vec<String>,
     autocomplete_index: usize,
     autocomplete_prefix: String,
+    
+    discord_client: Option<DiscordIpcClient>,
+    discord_start_time: i64,
+    discord_enabled: bool,
 }
 
 impl Editor {
@@ -311,7 +319,15 @@ impl Editor {
             autocomplete_suggestions: vec![],
             autocomplete_index: 0,
             autocomplete_prefix: String::new(),
+            discord_client: None,
+            discord_start_time: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+            discord_enabled: true,
         };
+        
+        e.init_discord();
         
         let path = PathBuf::from(initial_path);
         if path.exists() && path.is_file() {
@@ -335,6 +351,75 @@ impl Editor {
         }
         
         e
+    }
+
+    fn init_discord(&mut self) {
+        const DISCORD_APP_ID: &str = "1457025246568906804";
+        
+        match DiscordIpcClient::new(DISCORD_APP_ID) {
+            Ok(mut client) => {
+                match client.connect() {
+                    Ok(_) => {
+                        self.discord_client = Some(client);
+                        self.update_discord_presence();
+                    }
+                    Err(_) => {
+                        self.discord_enabled = false;
+                    }
+                }
+            }
+            Err(_) => {
+                self.discord_enabled = false;
+            }
+        }
+    }
+
+    fn update_discord_presence(&mut self) {
+        if !self.discord_enabled {
+            return;
+        }
+        
+        let client = match &mut self.discord_client {
+            Some(c) => c,
+            None => return,
+        };
+        
+        let (details, state) = if let Some(ref file_name) = self.file_name {
+            let lang_name = match self.language {
+                Language::Rust => "Rust",
+                Language::JavaScript => "JavaScript",
+                Language::Python => "Python",
+                Language::C => "C",
+                Language::Cpp => "C++",
+                Language::Java => "Java",
+                Language::None => "Text",
+            };
+            
+            let line_count = self.buffer.len();
+            (
+                format!("Editing {}", file_name),
+                format!("{} | {} lines", lang_name, line_count),
+            )
+        } else {
+            (
+                "Idle".to_string(),
+                "No file open".to_string(),
+            )
+        };
+        
+        let activity = Activity::new()
+            .details(&details)
+            .state(&state)
+            .timestamps(Timestamps::new().start(self.discord_start_time));
+        
+        let _ = client.set_activity(activity);
+    }
+
+    fn close_discord(&mut self) {
+        if let Some(ref mut client) = self.discord_client {
+            let _ = client.close();
+        }
+        self.discord_client = None;
     }
 
     fn load_root(&mut self, dir: &str) {
@@ -426,6 +511,7 @@ impl Editor {
         self.dirty_files.remove(path);
         self.update_bracket_matching();
         self.save_history_state();
+        self.update_discord_presence();
         Ok(())
     }
     
@@ -3078,6 +3164,7 @@ fn main() -> io::Result<()> {
         }
     }
 
+    ed.close_discord();
     execute!(out, DisableMouseCapture, terminal::LeaveAlternateScreen, cursor::Show)?;
     terminal::disable_raw_mode()?;
     Ok(())
