@@ -1,0 +1,39 @@
+# Rust build artifacts
+/target/
+debug/
+*.pdb
+
+# Cargo lock (binary projeler için dahil edilebilir, library için ignore)
+# Cargo.lock
+
+# IDE / Editor
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Backup files
+*.bak
+*.backup
+backup/
+
+# Logs
+*.log
+
+# Installer output
+installer/output/
+
+# Temporary files
+*.tmp
+*.temp
+
+.Cargo.lock
