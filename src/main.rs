@@ -200,7 +200,7 @@ struct Editor {
 
     tree: Vec<FileNode>,
     tree_cursor: usize,
-    tree_scroll: usize, // File tree scroll pozisyonu
+    tree_scroll: usize, 
     show_tree: bool,
 
     show_line_numbers: bool,
@@ -246,7 +246,7 @@ struct Editor {
     
     last_scroll_y: usize,
     last_scroll_x: usize,
-    last_tree_scroll: usize, // Tree scroll değişikliğini takip etmek için
+    last_tree_scroll: usize,  
     needs_full_redraw: bool, 
     
     quit_confirm: bool,
@@ -343,7 +343,7 @@ impl Editor {
                 for (i, node) in e.tree.iter().enumerate() {
                     if node.path == path {
                         e.tree_cursor = i;
-                        e.tree_scroll = 0; // Tree yenilendi, scroll'u sıfırla
+                        e.tree_scroll = 0; 
                         break;
                     }
                 }
@@ -430,8 +430,8 @@ impl Editor {
     fn load_root(&mut self, dir: &str) {
         self.tree.clear();
         self.load_dir(PathBuf::from(dir), 0);
-        self.tree_scroll = 0; // Tree yenilendi, scroll'u sıfırla
-        self.tree_cursor = 0; // Cursor'u başa al
+        self.tree_scroll = 0; 
+        self.tree_cursor = 0; 
         self.needs_full_redraw = true; 
     }
 
@@ -1231,7 +1231,6 @@ impl Editor {
             
             if parent.to_string_lossy() == "." {
                 self.load_root(".");
-                // load_root zaten tree_cursor ve tree_scroll'u sıfırlar
             } else {
                 self.reload_tree_at_parent(&parent);
                 for (i, node) in self.tree.iter().enumerate() {
@@ -2271,22 +2270,17 @@ fn draw(ed: &mut Editor, out: &mut io::Stdout) -> io::Result<()> {
     }
 
     if ed.show_tree {
-        // Tree scroll: tree_scroll'den başlayarak max_lines kadar göster
         let tree_max_scroll = ed.tree.len().saturating_sub(max_lines as usize);
-        // Scroll'u tree sınırları içinde tut
         ed.tree_scroll = ed.tree_scroll.min(tree_max_scroll);
         
-        // Tree scroll değiştiyse veya full redraw gerekiyorsa, tree bölgesini temizle
         let tree_scroll_changed = ed.tree_scroll != ed.last_tree_scroll || ed.needs_full_redraw;
         if tree_scroll_changed {
-            // Tree bölgesindeki tüm satırları temizle
             for y in 0..max_lines {
                 execute!(out, cursor::MoveTo(0, y))?;
-                write!(out, "{:width$}", "", width = TREE_WIDTH as usize)?; // Tree genişliği kadar temizle
+                write!(out, "{:width$}", "", width = TREE_WIDTH as usize)?; 
             }
         }
         
-        // Tree öğelerini render et
         for (screen_i, tree_i) in (ed.tree_scroll..ed.tree.len()).enumerate().take(max_lines as usize) {
             if let Some(n) = ed.tree.get(tree_i) {
                 execute!(out, cursor::MoveTo(0, screen_i as u16))?;
@@ -2294,13 +2288,11 @@ fn draw(ed: &mut Editor, out: &mut io::Stdout) -> io::Result<()> {
                 let icon = if n.is_dir { "📁" } else { "📄" };
                 let prefix = if !n.is_dir && ed.dirty_files.contains(&n.path) { "." } else { "" };
                 let name_display = format!("{} {}{} {}{}", mark, "  ".repeat(n.depth), icon, prefix, n.name);
-                // Tree genişliğini aşan kısmı kes
                 let truncated: String = name_display.chars().take(TREE_WIDTH as usize).collect();
                 write!(out, "{:<width$}", truncated, width = TREE_WIDTH as usize)?;
             }
         }
         
-        // Eğer tree'de daha az satır varsa, kalan satırları temizle
         let visible_tree_items = (ed.tree.len().saturating_sub(ed.tree_scroll)).min(max_lines as usize);
         if visible_tree_items < max_lines as usize {
             for y in visible_tree_items..max_lines as usize {
@@ -2309,7 +2301,6 @@ fn draw(ed: &mut Editor, out: &mut io::Stdout) -> io::Result<()> {
             }
         }
         
-        // Tree scroll pozisyonunu kaydet
         ed.last_tree_scroll = ed.tree_scroll;
     }
 
@@ -3049,7 +3040,6 @@ fn main() -> io::Result<()> {
                                 (KeyCode::Up, m) if ed.show_tree && !m.contains(KeyModifiers::SHIFT) => { 
                                     if ed.tree_cursor > 0 {
                                         ed.tree_cursor -= 1;
-                                        // Cursor görünür alanın dışındaysa scroll'u güncelle
                                         let (_, rows) = terminal::size().unwrap_or((80, 24));
                                         let max_tree_lines = (rows - STATUS_HEIGHT) as usize;
                                         if ed.tree_cursor < ed.tree_scroll {
@@ -3061,7 +3051,6 @@ fn main() -> io::Result<()> {
                                 (KeyCode::Down, m) if ed.show_tree && !m.contains(KeyModifiers::SHIFT) => { 
                                     if ed.tree_cursor + 1 < ed.tree.len() {
                                         ed.tree_cursor += 1;
-                                        // Cursor görünür alanın dışındaysa scroll'u güncelle
                                         let (_, rows) = terminal::size().unwrap_or((80, 24));
                                         let max_tree_lines = (rows - STATUS_HEIGHT) as usize;
                                         if ed.tree_cursor >= ed.tree_scroll + max_tree_lines {
@@ -3203,13 +3192,17 @@ fn main() -> io::Result<()> {
                                         ed.indent();
                                     }
                                 }
-                                (KeyCode::Char(c), m) if !m.contains(KeyModifiers::CONTROL) => {
-                                    if ed.is_selecting {
-                                        ed.is_selecting = false;
-                                        ed.selection_start = None;
-                                        ed.selection_end = None;
+                                (KeyCode::Char(c), m) => {
+                                    // Tüm karakterleri kabul et, sadece tek başına CONTROL kombinasyonlarını reddet
+                                    // ALT/ALTGR (ALT+CTRL) tuşlarıyla yazılan karakterleri de kabul et (#, |, @, vb.)
+                                    if !m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) {
+                                        if ed.is_selecting {
+                                            ed.is_selecting = false;
+                                            ed.selection_start = None;
+                                            ed.selection_end = None;
+                                        }
+                                        ed.insert(c);
                                     }
-                                    ed.insert(c);
                                 }
                                 _ => {}
                             }
