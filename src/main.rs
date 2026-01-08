@@ -200,6 +200,7 @@ struct Editor {
 
     tree: Vec<FileNode>,
     tree_cursor: usize,
+    tree_scroll: usize, // File tree scroll pozisyonu
     show_tree: bool,
 
     show_line_numbers: bool,
@@ -245,6 +246,7 @@ struct Editor {
     
     last_scroll_y: usize,
     last_scroll_x: usize,
+    last_tree_scroll: usize, // Tree scroll değişikliğini takip etmek için
     needs_full_redraw: bool, 
     
     quit_confirm: bool,
@@ -280,6 +282,7 @@ impl Editor {
             dirty: true,
             tree: vec![],
             tree_cursor: 0,
+            tree_scroll: 0,
             show_tree: false,
             show_line_numbers: true,
             mode: EditorMode::Normal,
@@ -312,6 +315,7 @@ impl Editor {
             matched_bracket: None,
             last_scroll_y: 0,
             last_scroll_x: 0,
+            last_tree_scroll: 0,
             needs_full_redraw: true,
             quit_confirm: false,
             dirty_files: HashSet::new(),
@@ -339,6 +343,7 @@ impl Editor {
                 for (i, node) in e.tree.iter().enumerate() {
                     if node.path == path {
                         e.tree_cursor = i;
+                        e.tree_scroll = 0; // Tree yenilendi, scroll'u sıfırla
                         break;
                     }
                 }
@@ -425,6 +430,8 @@ impl Editor {
     fn load_root(&mut self, dir: &str) {
         self.tree.clear();
         self.load_dir(PathBuf::from(dir), 0);
+        self.tree_scroll = 0; // Tree yenilendi, scroll'u sıfırla
+        self.tree_cursor = 0; // Cursor'u başa al
         self.needs_full_redraw = true; 
     }
 
@@ -1224,7 +1231,7 @@ impl Editor {
             
             if parent.to_string_lossy() == "." {
                 self.load_root(".");
-                self.tree_cursor = 0;
+                // load_root zaten tree_cursor ve tree_scroll'u sıfırlar
             } else {
                 self.reload_tree_at_parent(&parent);
                 for (i, node) in self.tree.iter().enumerate() {
@@ -2173,6 +2180,7 @@ fn draw(ed: &mut Editor, out: &mut io::Stdout) -> io::Result<()> {
     let text_offset = tree_offset + line_num_offset;
 
     let scroll_changed = ed.scroll_y != ed.last_scroll_y || ed.scroll_x != ed.last_scroll_x;
+    let tree_scroll_changed = ed.show_tree && (ed.tree_scroll != ed.last_tree_scroll || ed.needs_full_redraw);
     let should_clear = ed.needs_full_redraw || scroll_changed;
     
     if should_clear {
@@ -2263,13 +2271,46 @@ fn draw(ed: &mut Editor, out: &mut io::Stdout) -> io::Result<()> {
     }
 
     if ed.show_tree {
-        for (i, n) in ed.tree.iter().enumerate().take(max_lines as usize) {
-            execute!(out, cursor::MoveTo(0, i as u16))?;
-            let mark = if i == ed.tree_cursor { ">" } else { " " };
-            let icon = if n.is_dir { "📁" } else { "📄" };
-            let prefix = if !n.is_dir && ed.dirty_files.contains(&n.path) { "." } else { "" };
-            write!(out, "{} {}{} {}{}", mark, "  ".repeat(n.depth), icon, prefix, n.name)?;
+        // Tree scroll: tree_scroll'den başlayarak max_lines kadar göster
+        let tree_max_scroll = ed.tree.len().saturating_sub(max_lines as usize);
+        // Scroll'u tree sınırları içinde tut
+        ed.tree_scroll = ed.tree_scroll.min(tree_max_scroll);
+        
+        // Tree scroll değiştiyse veya full redraw gerekiyorsa, tree bölgesini temizle
+        let tree_scroll_changed = ed.tree_scroll != ed.last_tree_scroll || ed.needs_full_redraw;
+        if tree_scroll_changed {
+            // Tree bölgesindeki tüm satırları temizle
+            for y in 0..max_lines {
+                execute!(out, cursor::MoveTo(0, y))?;
+                write!(out, "{:width$}", "", width = TREE_WIDTH as usize)?; // Tree genişliği kadar temizle
+            }
         }
+        
+        // Tree öğelerini render et
+        for (screen_i, tree_i) in (ed.tree_scroll..ed.tree.len()).enumerate().take(max_lines as usize) {
+            if let Some(n) = ed.tree.get(tree_i) {
+                execute!(out, cursor::MoveTo(0, screen_i as u16))?;
+                let mark = if tree_i == ed.tree_cursor { ">" } else { " " };
+                let icon = if n.is_dir { "📁" } else { "📄" };
+                let prefix = if !n.is_dir && ed.dirty_files.contains(&n.path) { "." } else { "" };
+                let name_display = format!("{} {}{} {}{}", mark, "  ".repeat(n.depth), icon, prefix, n.name);
+                // Tree genişliğini aşan kısmı kes
+                let truncated: String = name_display.chars().take(TREE_WIDTH as usize).collect();
+                write!(out, "{:<width$}", truncated, width = TREE_WIDTH as usize)?;
+            }
+        }
+        
+        // Eğer tree'de daha az satır varsa, kalan satırları temizle
+        let visible_tree_items = (ed.tree.len().saturating_sub(ed.tree_scroll)).min(max_lines as usize);
+        if visible_tree_items < max_lines as usize {
+            for y in visible_tree_items..max_lines as usize {
+                execute!(out, cursor::MoveTo(0, y as u16))?;
+                write!(out, "{:width$}", "", width = TREE_WIDTH as usize)?;
+            }
+        }
+        
+        // Tree scroll pozisyonunu kaydet
+        ed.last_tree_scroll = ed.tree_scroll;
     }
 
     if ed.show_line_numbers {
@@ -3006,12 +3047,28 @@ fn main() -> io::Result<()> {
                                 }
 
                                 (KeyCode::Up, m) if ed.show_tree && !m.contains(KeyModifiers::SHIFT) => { 
-                                    ed.tree_cursor = ed.tree_cursor.saturating_sub(1); 
-                                    ed.dirty = true; 
+                                    if ed.tree_cursor > 0 {
+                                        ed.tree_cursor -= 1;
+                                        // Cursor görünür alanın dışındaysa scroll'u güncelle
+                                        let (_, rows) = terminal::size().unwrap_or((80, 24));
+                                        let max_tree_lines = (rows - STATUS_HEIGHT) as usize;
+                                        if ed.tree_cursor < ed.tree_scroll {
+                                            ed.tree_scroll = ed.tree_cursor;
+                                        }
+                                        ed.dirty = true;
+                                    }
                                 }
-                                (KeyCode::Down, m) if ed.show_tree && ed.tree_cursor + 1 < ed.tree.len() && !m.contains(KeyModifiers::SHIFT) => { 
-                                    ed.tree_cursor += 1; 
-                                    ed.dirty = true; 
+                                (KeyCode::Down, m) if ed.show_tree && !m.contains(KeyModifiers::SHIFT) => { 
+                                    if ed.tree_cursor + 1 < ed.tree.len() {
+                                        ed.tree_cursor += 1;
+                                        // Cursor görünür alanın dışındaysa scroll'u güncelle
+                                        let (_, rows) = terminal::size().unwrap_or((80, 24));
+                                        let max_tree_lines = (rows - STATUS_HEIGHT) as usize;
+                                        if ed.tree_cursor >= ed.tree_scroll + max_tree_lines {
+                                            ed.tree_scroll = ed.tree_cursor - max_tree_lines + 1;
+                                        }
+                                        ed.dirty = true;
+                                    }
                                 }
                                 (KeyCode::Enter, _) if ed.show_tree => {
                                     let n = ed.tree[ed.tree_cursor].clone();
