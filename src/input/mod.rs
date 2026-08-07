@@ -12,7 +12,7 @@
 
 pub mod keymap;
 
-use crossterm::event::{KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::app::mode::Mode;
 use crate::editor::cursor::Motion;
@@ -125,6 +125,7 @@ pub struct Input {
 impl Input {
     /// Translate one key press in the context of `mode`.
     pub fn handle(&mut self, key: KeyEvent, mode: Mode) -> Action {
+        let key = normalise_alt_gr(key);
         if let Some(prefix) = self.pending.take() {
             return keymap::pending(prefix, key);
         }
@@ -143,6 +144,31 @@ impl Input {
     }
 }
 
+/// Strip the phantom Ctrl+Alt that Windows puts on an AltGr character.
+///
+/// Windows implements AltGr as right-Alt plus left-Ctrl, and the console hands
+/// crossterm both of those flags alongside the character the layout actually
+/// produced. So `#` on a Turkish (or German, French, Polish, …) layout arrives
+/// as `Char('#')` with `CONTROL | ALT`, every keymap rejects it as a modified
+/// key, and the character is impossible to type — while the same character
+/// loaded from a file displays fine.
+///
+/// The character has already been resolved by the layout at this point, so the
+/// two modifiers carry no further meaning and are dropped. Nothing is bound to
+/// Ctrl+Alt, so no chord is lost; Shift is left alone because [`is_plain`]
+/// already tolerates it.
+#[must_use]
+fn normalise_alt_gr(mut key: KeyEvent) -> KeyEvent {
+    let alt_gr = KeyModifiers::CONTROL | KeyModifiers::ALT;
+    if key.modifiers.contains(alt_gr)
+        && let KeyCode::Char(ch) = key.code
+        && !ch.is_control()
+    {
+        key.modifiers.remove(alt_gr);
+    }
+    key
+}
+
 /// Whether a key carries no modifier that changes its meaning.
 ///
 /// Shift is ignored on purpose: crossterm already reports the shifted character,
@@ -156,4 +182,57 @@ pub(crate) fn is_plain(modifiers: KeyModifiers) -> bool {
 #[must_use]
 pub(crate) fn is_ctrl(modifiers: KeyModifiers) -> bool {
     modifiers.contains(KeyModifiers::CONTROL)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::cursor::Motion;
+
+    /// AltGr as Windows reports it: the layout's character plus Ctrl and Alt.
+    fn alt_gr(ch: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL | KeyModifiers::ALT)
+    }
+
+    fn plain(ch: char) -> KeyEvent {
+        KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn alt_gr_characters_are_inserted_as_text() {
+        let mut input = Input::default();
+        for ch in ['#', '$', '{', '}', '[', ']', '\\', '@', '€'] {
+            assert_eq!(input.handle(alt_gr(ch), Mode::Insert), Action::Insert(ch));
+        }
+    }
+
+    #[test]
+    fn alt_gr_characters_reach_the_command_and_search_prompts() {
+        let mut input = Input::default();
+        assert_eq!(
+            input.handle(alt_gr('#'), Mode::Command),
+            Action::CommandInput('#')
+        );
+        assert_eq!(
+            input.handle(alt_gr('$'), Mode::Search),
+            Action::SearchInput('$')
+        );
+    }
+
+    #[test]
+    fn an_alt_gr_character_keeps_its_normal_mode_binding() {
+        let mut input = Input::default();
+        assert_eq!(
+            input.handle(alt_gr('$'), Mode::Normal),
+            Action::Move(Motion::LineEnd)
+        );
+    }
+
+    #[test]
+    fn control_chords_still_win_over_text() {
+        let mut input = Input::default();
+        let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
+        assert_eq!(input.handle(ctrl_s, Mode::Insert), Action::Save);
+        assert_eq!(input.handle(plain('a'), Mode::Insert), Action::Insert('a'));
+    }
 }
