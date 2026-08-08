@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-08
+
+### Fixed
+
+- Characters that need AltGr — `#`, `$`, `{`, `}`, `[`, `]`, `\`, `@`, `€` and
+  the rest, depending on the layout — could not be typed on Windows. The console
+  reports AltGr as Ctrl+Alt alongside the character the layout produced, so every
+  keymap rejected the key as a modified one and dropped it. The same characters
+  displayed correctly when loaded from a file, which made the bug look like a
+  rendering problem rather than an input one.
+
 ## [0.1.0] - 2026-07-26
 
 First release.
@@ -34,5 +45,6 @@ First release.
   slots they name.
 - **Configuration** — TOML, with every key optional and unknown keys reported.
 
-[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/tuna4ll/termi/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/tuna4ll/termi/releases/tag/v0.1.0
