@@ -80,36 +80,13 @@ impl Regions {
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let show_tabs = app.config.show_tabs && app.buffers.len() > 1;
     let regions = Regions::split(frame.area(), show_tabs, app.tree_visible);
-    // Page motions need the window height, which is only known here.
-    app.viewport_height = regions.editor.height;
 
-    // Scrolling has to happen before anything is drawn, and it is the only part
-    // of rendering that mutates state. Destructuring keeps the borrow checker
-    // happy about holding `config` and a buffer at the same time.
-    {
-        let App {
-            buffers,
-            active,
-            config,
-            ..
-        } = &mut *app;
-        let buffer = &mut buffers[*active];
-        editor_view::scroll_into_view(buffer, config, regions.editor);
-
-        // Extend the syntax state cache to cover what is about to be drawn.
-        // Like scrolling, this needs the window height and mutates, so it has to
-        // happen before the immutable render pass.
-        if config.syntax_highlighting {
-            let last = buffer.view.top_line + usize::from(regions.editor.height);
-            let Buffer {
-                document, syntax, ..
-            } = buffer;
-            syntax.ensure(document, last);
-        }
-    }
+    prepare(app, regions.editor);
 
     let editor = EditorView {
         buffer: app.buffer(),
+        window: app.window(),
+        focused: true,
         theme: &app.theme,
         config: &app.config,
         selection: selection_range(app),
@@ -131,7 +108,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(
             TabBar {
                 tabs: &tabs,
-                active: app.active,
+                active: app.window.buffer,
                 theme: &app.theme,
             },
             area,
@@ -200,19 +177,46 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
+/// Bring the window up to date with the area it is about to be drawn in.
+///
+/// This is the only part of rendering that mutates state, and it has to happen
+/// before the immutable draw pass: the caret cannot be scrolled into view, and
+/// the syntax cache cannot be extended to cover the visible lines, until the
+/// size of the text area is known.
+fn prepare(app: &mut App, area: Rect) {
+    let index = app.window.buffer;
+    app.window.height = area.height;
+
+    let App {
+        buffers,
+        window,
+        config,
+        ..
+    } = app;
+    editor_view::scroll_into_view(&buffers[index], window, config, area);
+
+    if config.syntax_highlighting {
+        let last = window.view.top_line + usize::from(area.height);
+        let Buffer {
+            document, syntax, ..
+        } = &mut buffers[index];
+        syntax.ensure(document, last);
+    }
+}
+
 /// The match the caret currently sits on, so it can be highlighted differently
 /// from the other matches.
 fn active_match(app: &App) -> Option<Range> {
     if !app.search.is_active() {
         return None;
     }
-    let buffer = app.buffer();
-    let head = buffer.document.pos_to_char(buffer.cursor().head);
-    let line = buffer.cursor().head.line;
-    let line_start = buffer.document.line_start(line);
+    let document = &app.buffer().document;
+    let cursor = app.window().cursor();
+    let head = document.pos_to_char(cursor.head);
+    let line_start = document.line_start(cursor.head.line);
 
     app.search
-        .matches_in_line(&buffer.document.line_string(line))
+        .matches_in_line(&document.line_string(cursor.head.line))
         .into_iter()
         .map(|found| Range {
             start: line_start + found.start,
@@ -223,11 +227,11 @@ fn active_match(app: &App) -> Option<Range> {
 
 /// The span to paint as selected, which exists only in visual modes.
 fn selection_range(app: &App) -> Option<Range> {
-    let buffer = app.buffer();
-    let cursor = buffer.cursor();
+    let document = &app.buffer().document;
+    let cursor = app.window().cursor();
     match app.mode {
-        crate::app::mode::Mode::Visual => Some(Range::of(&cursor, &buffer.document)),
-        crate::app::mode::Mode::VisualLine => Some(Range::of_lines(&cursor, &buffer.document)),
+        crate::app::mode::Mode::Visual => Some(Range::of(&cursor, document)),
+        crate::app::mode::Mode::VisualLine => Some(Range::of_lines(&cursor, document)),
         _ => None,
     }
 }
@@ -235,15 +239,16 @@ fn selection_range(app: &App) -> Option<Range> {
 /// Gather the values the status bar reports.
 fn status_bar(app: &App) -> StatusBar<'_> {
     let buffer = app.buffer();
+    let window = app.window();
     StatusBar {
         mode: app.mode,
         name: buffer.document.display_name(),
         dirty: buffer.document.is_dirty(),
         language: buffer.syntax.language_name(),
-        position: buffer.cursor().head,
+        position: window.cursor().head,
         line_count: buffer.document.len_lines(),
         line_ending: buffer.document.line_ending(),
-        cursor_count: buffer.cursors().len(),
+        cursor_count: window.cursors().len(),
         theme: &app.theme,
     }
 }

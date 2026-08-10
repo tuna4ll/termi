@@ -1,60 +1,55 @@
 //! # Buffer
 //!
-//! **Purpose:** a document *being edited* — text plus everything the editor
-//! remembers about looking at it.
+//! **Purpose:** a file being edited — its text and everything derived from it.
 //!
-//! **Responsibility:** owns one [`Document`], the cursors pointing into it, and
-//! the [`View`] scrolled over it. This is the unit the application opens,
-//! switches between and closes; the document below it stays a pure text value.
+//! **Responsibility:** owns one [`Document`], the [`History`] that rewinds it
+//! and the syntax state computed from it. Everything here is a property of the
+//! *file* rather than of anyone looking at it, which is the line that makes
+//! split windows possible: two windows showing the same buffer share one text,
+//! one undo history and one set of highlights, while each keeps its own cursors
+//! and scroll position in a [`Window`](crate::editor::window::Window).
 //!
-//! **Public API:** [`Buffer`].
+//! **Public API:** [`Buffer`], [`BufferId`].
 
-pub mod edit;
-pub mod view;
-
-use crate::editor::cursor::{Cursor, Motion, Position};
 use crate::editor::document::Document;
 use crate::syntax::{self, HighlightCache};
 use crate::undo::History;
 
-pub use view::View;
+/// Position of a buffer in the editor's buffer list.
+///
+/// Buffers are only ever appended to and removed from that list through
+/// [`App`](crate::app::App), which repairs the window references as it goes, so
+/// a plain index is enough of an identifier.
+pub type BufferId = usize;
 
-/// A document, the cursors editing it, and the viewport showing it.
+/// A document, the history that rewinds it and the highlighting derived from it.
 #[derive(Debug)]
 pub struct Buffer {
     /// The text.
     pub document: Document,
-    /// Scroll position.
-    pub view: View,
-    /// Every cursor, kept sorted by head position and never empty.
-    ///
-    /// Multi-cursor is modelled from the start rather than bolted on: every edit
-    /// already iterates this vector, so adding a second cursor later is a UI
-    /// change rather than an editing-core change. Document order matters because
-    /// edits are applied back-to-front, which keeps earlier offsets valid.
-    cursors: Vec<Cursor>,
-    /// Index into `cursors` of the one the viewport follows.
-    primary: usize,
-    /// Undo and redo stacks for this buffer only — history is per file, so
-    /// switching tabs never mixes two files' edits into one undo step.
+    /// Undo and redo stacks for this file only — history is per file, so
+    /// switching buffers never mixes two files' edits into one undo step.
     pub history: History,
     /// Detected language and the per-line syntax state derived from it.
     pub syntax: HighlightCache,
 }
 
 impl Buffer {
-    /// Wrap a document in a fresh buffer with a single cursor at the top.
+    /// Wrap a document in a fresh buffer.
     #[must_use]
     pub fn new(document: Document) -> Self {
         let syntax = HighlightCache::new(document.path().and_then(syntax::detect));
         Self {
             document,
-            view: View::default(),
-            cursors: vec![Cursor::at(Position::ZERO)],
-            primary: 0,
             history: History::default(),
             syntax,
         }
+    }
+
+    /// An empty scratch buffer.
+    #[must_use]
+    pub fn empty() -> Self {
+        Self::new(Document::new())
     }
 
     /// Re-run language detection, after the file has been renamed or reloaded.
@@ -66,170 +61,5 @@ impl Buffer {
     /// Mark every line after `line` as needing its syntax state recomputed.
     pub fn invalidate_syntax_from(&mut self, line: usize) {
         self.syntax.invalidate_from(line);
-    }
-
-    /// An empty scratch buffer.
-    #[must_use]
-    pub fn empty() -> Self {
-        Self::new(Document::new())
-    }
-
-    /// The primary cursor — the one the viewport follows and the status bar
-    /// reports.
-    #[must_use]
-    pub fn cursor(&self) -> Cursor {
-        self.cursors[self.primary]
-    }
-
-    /// Mutable access to the primary cursor.
-    pub fn cursor_mut(&mut self) -> &mut Cursor {
-        &mut self.cursors[self.primary]
-    }
-
-    /// All cursors, in document order.
-    #[must_use]
-    pub fn cursors(&self) -> &[Cursor] {
-        &self.cursors
-    }
-
-    /// Move every cursor by the same motion.
-    pub fn move_cursors(&mut self, motion: Motion, extend: bool, allow_eol: bool) {
-        for cursor in &mut self.cursors {
-            cursor.apply(motion, &self.document, extend, allow_eol);
-        }
-        self.resort();
-    }
-
-    /// Drop every selection, leaving the carets where they are.
-    pub fn collapse_selections(&mut self) {
-        for cursor in &mut self.cursors {
-            cursor.collapse();
-        }
-    }
-
-    /// Start a selection at every caret, as entering visual mode does.
-    pub fn anchor_selections(&mut self) {
-        for cursor in &mut self.cursors {
-            cursor.anchor_here();
-        }
-    }
-
-    /// Add a secondary cursor, ignoring one that already exists there.
-    pub fn add_cursor(&mut self, cursor: Cursor) {
-        if self.cursors.iter().any(|c| c.head == cursor.head) {
-            return;
-        }
-        self.cursors.push(cursor);
-        self.resort();
-    }
-
-    /// Collapse back to a single cursor, keeping the primary one.
-    pub fn clear_secondary_cursors(&mut self) {
-        let primary = self.cursors[self.primary];
-        self.cursors.clear();
-        self.cursors.push(primary);
-        self.primary = 0;
-    }
-
-    /// Indices of all cursors, last in the document first.
-    ///
-    /// Editing from the end backwards means each edit only shifts text *after*
-    /// the cursors already handled, so no offset fix-up pass is needed.
-    #[must_use]
-    pub fn edit_order(&self) -> Vec<usize> {
-        (0..self.cursors.len()).rev().collect()
-    }
-
-    /// Pull every cursor back inside the document.
-    ///
-    /// Called after any edit that can shrink the text — undo, reload, deleting a
-    /// selection — so no cursor is left pointing past the end.
-    pub fn clamp_cursors(&mut self, allow_eol: bool) {
-        for cursor in &mut self.cursors {
-            cursor.head = self.document.clamp(cursor.head, allow_eol);
-            cursor.anchor = self.document.clamp(cursor.anchor, allow_eol);
-        }
-        self.resort();
-    }
-
-    /// Restore document order, drop cursors that collided, and follow the
-    /// primary one to its new index.
-    fn resort(&mut self) {
-        if self.cursors.len() == 1 {
-            self.primary = 0;
-            return;
-        }
-        let primary_head = self.cursors[self.primary].head;
-        self.cursors.sort_by_key(|c| c.head);
-        self.cursors.dedup_by_key(|c| c.head);
-        self.primary = self
-            .cursors
-            .iter()
-            .position(|c| c.head == primary_head)
-            .unwrap_or(0);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn buffer(text: &str) -> Buffer {
-        Buffer::new(Document::from_text(text, None))
-    }
-
-    #[test]
-    fn a_new_buffer_has_exactly_one_cursor() {
-        let buf = buffer("abc");
-        assert_eq!(buf.cursors().len(), 1);
-        assert_eq!(buf.cursor().head, Position::ZERO);
-    }
-
-    #[test]
-    fn cursors_stay_in_document_order() {
-        let mut buf = buffer("aaa\nbbb\nccc");
-        buf.add_cursor(Cursor::at(Position::new(2, 1)));
-        buf.add_cursor(Cursor::at(Position::new(1, 1)));
-        let heads: Vec<_> = buf.cursors().iter().map(|c| c.head).collect();
-        assert_eq!(
-            heads,
-            vec![Position::ZERO, Position::new(1, 1), Position::new(2, 1)]
-        );
-        // The primary cursor followed its position through the sort.
-        assert_eq!(buf.cursor().head, Position::ZERO);
-    }
-
-    #[test]
-    fn duplicate_cursors_are_rejected() {
-        let mut buf = buffer("abc");
-        buf.add_cursor(Cursor::at(Position::ZERO));
-        assert_eq!(buf.cursors().len(), 1);
-    }
-
-    #[test]
-    fn collapsing_cursors_keeps_the_primary_one() {
-        let mut buf = buffer("aaa\nbbb");
-        buf.add_cursor(Cursor::at(Position::new(1, 2)));
-        buf.clear_secondary_cursors();
-        assert_eq!(buf.cursors().len(), 1);
-        assert_eq!(buf.cursor().head, Position::ZERO);
-    }
-
-    #[test]
-    fn merged_cursors_do_not_leave_a_dangling_primary() {
-        let mut buf = buffer("abc");
-        buf.add_cursor(Cursor::at(Position::new(0, 1)));
-        // Both cursors run into the same end-of-line position and merge.
-        buf.move_cursors(Motion::LineEnd, false, false);
-        assert_eq!(buf.cursors().len(), 1);
-        assert_eq!(buf.cursor().head, Position::new(0, 2));
-    }
-
-    #[test]
-    fn edit_order_runs_backwards_through_the_document() {
-        let mut buf = buffer("aaa\nbbb\nccc");
-        buf.add_cursor(Cursor::at(Position::new(1, 0)));
-        buf.add_cursor(Cursor::at(Position::new(2, 0)));
-        assert_eq!(buf.edit_order(), vec![2, 1, 0]);
     }
 }

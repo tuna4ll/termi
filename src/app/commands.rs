@@ -53,10 +53,7 @@ fn execute(app: &mut App, command: Command) {
         }
         Command::Edit { path, force } => edit(app, path, force),
         Command::Reload => reload(app),
-        Command::GotoLine(line) => {
-            app.buffer_mut()
-                .move_cursors(Motion::ToLine(line), false, false);
-        }
+        Command::GotoLine(line) => app.move_cursors(Motion::ToLine(line), false, false),
         Command::Set { key, value } => set_option(app, &key, &value),
         Command::Theme(name) => set_theme(app, &name),
         Command::CycleBuffer { forward } => app.cycle_buffer(forward),
@@ -72,7 +69,7 @@ fn execute(app: &mut App, command: Command) {
 
 fn write(app: &mut App, path: Option<PathBuf>) {
     if app.config.trim_trailing_whitespace {
-        app.buffer_mut().trim_trailing_whitespace();
+        app.edit().trim_trailing_whitespace();
     }
     let result = match path {
         Some(path) => app.buffer_mut().document.save_as(path),
@@ -119,8 +116,8 @@ fn reload(app: &mut App) {
     match app.buffer_mut().document.reload() {
         Ok(()) => {
             // The file may have shrunk, so no cursor can be trusted afterwards.
-            app.buffer_mut().clear_secondary_cursors();
-            app.buffer_mut().clamp_cursors(false);
+            app.window_mut().clear_secondary_cursors();
+            app.clamp_cursors(false);
             app.info("reloaded from disk");
         }
         Err(error) => app.error(error.to_string()),
@@ -196,23 +193,24 @@ fn substitute(app: &mut App, pattern: &str, replacement: &str, all: bool, whole_
     let lines = if whole_file {
         0..app.buffer().document.len_lines()
     } else {
-        let line = app.buffer().cursor().head.line;
+        let line = app.window().cursor().head.line;
         line..line + 1
     };
 
+    let index = app.window.buffer;
     let App {
-        buffers,
-        active,
-        search,
-        ..
+        buffers, search, ..
     } = app;
-    let replaced = search.replace_in(&mut buffers[*active].document, lines, replacement, all);
+    let replaced = search.replace_in(&mut buffers[index].document, lines, replacement, all);
 
+    // The replacement went straight into the document, so the highlighter is
+    // still holding state it derived from the text that used to be there.
+    app.buffer_mut().invalidate_syntax_from(0);
     // Substitution rewrites whole lines, so the caret may now be past the end.
-    app.buffer_mut().clamp_cursors(false);
+    app.clamp_cursors(false);
     // Rewriting lines wholesale cannot be expressed as one coalesced edit, so
     // close the undo step to keep the next keystroke separate.
-    app.buffer_mut().checkpoint();
+    app.edit().checkpoint();
 
     if replaced == 0 {
         app.error(format!("no match for {pattern}"));

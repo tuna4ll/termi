@@ -9,7 +9,7 @@
 //!
 //! **Public API:** [`View`].
 
-/// The scrolled position of a buffer within its window.
+/// The scrolled position of a buffer within one window.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct View {
     /// First document line drawn at the top of the text area.

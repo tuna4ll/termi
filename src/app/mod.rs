@@ -62,9 +62,9 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
                 dispatch::apply(app, action)?;
             }
             Event::Paste(text) => {
-                let (buffer, _) = app.buffer_and_config();
-                buffer.insert_text(&text);
-                buffer.checkpoint();
+                let mut edit = app.edit();
+                edit.insert_text(&text);
+                edit.checkpoint();
             }
             Event::Resize(_, _) => tui.clear()?,
             _ => {}
@@ -121,7 +121,7 @@ fn handle_external_changes(app: &mut App, changed: Vec<PathBuf>) {
             );
         } else if app.buffers[index].document.reload().is_ok() {
             app.buffers[index].detect_language();
-            app.buffers[index].clamp_cursors(false);
+            app.clamp_windows_on(index);
             let name = app.buffers[index].document.display_name().to_string();
             app.info(format!("{name} reloaded from disk"));
         }

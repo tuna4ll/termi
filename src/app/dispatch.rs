@@ -49,24 +49,24 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::Extend(motion) => move_cursors(app, motion, true),
         Action::Scroll(delta) => {
             let last = app.buffer().document.last_line();
-            app.buffer_mut().view.scroll_lines(delta, last);
+            app.window_mut().view.scroll_lines(delta, last);
         }
         Action::Page { down, half } => page(app, down, half),
 
         Action::Insert(ch) => insert_char(app, ch),
         Action::InsertNewline => {
-            let (buffer, config) = app.buffer_and_config();
-            buffer.insert_newline(config);
+            let (mut edit, config) = app.edit_and_config();
+            edit.insert_newline(config);
         }
         Action::InsertIndent => {
-            let (buffer, config) = app.buffer_and_config();
-            buffer.insert_indent(config);
+            let (mut edit, config) = app.edit_and_config();
+            edit.insert_indent(config);
         }
         Action::DeleteBackward => {
-            let (buffer, config) = app.buffer_and_config();
-            buffer.delete_backward(config);
+            let (mut edit, config) = app.edit_and_config();
+            edit.delete_backward(config);
         }
-        Action::DeleteForward => app.buffer_mut().delete_forward(),
+        Action::DeleteForward => app.edit().delete_forward(),
         Action::Delete => delete_target(app),
 
         Action::OpenLineBelow => open_line(app, true),
@@ -85,12 +85,12 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         }
 
         Action::Undo => {
-            if !app.buffer_mut().undo() {
+            if !app.edit().undo() {
                 app.info("already at the oldest change");
             }
         }
         Action::Redo => {
-            if !app.buffer_mut().redo() {
+            if !app.edit().redo() {
                 app.info("already at the newest change");
             }
         }
@@ -101,8 +101,8 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
 
         Action::AddCursor { below } => add_cursor(app, below),
         Action::ClearCursors => {
-            app.buffer_mut().clear_secondary_cursors();
-            app.buffer_mut().collapse_selections();
+            app.window_mut().clear_secondary_cursors();
+            app.window_mut().collapse_selections();
         }
 
         Action::CycleBuffer { forward } => app.cycle_buffer(forward),
@@ -170,13 +170,13 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
 /// so the bracket lines up with its opener — the one piece of "smart" behaviour
 /// that a per-line editor can get right without a parser.
 fn insert_char(app: &mut App, ch: char) {
-    let (buffer, config) = app.buffer_and_config();
-    let head = buffer.cursor().head;
+    let (mut edit, config) = app.edit_and_config();
+    let head = edit.window.cursor().head;
 
-    if config.auto_indent && indent::should_dedent(&buffer.document, head.line, head.col, ch) {
-        buffer.delete_backward(config);
+    if config.auto_indent && indent::should_dedent(&edit.buffer.document, head.line, head.col, ch) {
+        edit.delete_backward(config);
     }
-    buffer.insert_text(&ch.to_string());
+    edit.insert_text(&ch.to_string());
 }
 
 /// Upper bound on how many matches `:search` will count.
@@ -187,8 +187,9 @@ const MATCH_COUNT_CAP: usize = 10_000;
 
 /// Character offset of the primary caret.
 fn origin_offset(app: &App) -> usize {
-    let buffer = app.buffer();
-    buffer.document.pos_to_char(buffer.cursor().head)
+    app.buffer()
+        .document
+        .pos_to_char(app.window().cursor().head)
 }
 
 /// Jump to the first match at or after where the search started.
@@ -203,14 +204,14 @@ fn seek_from_origin(app: &mut App) {
         return;
     };
     let position = app.buffer().document.char_to_pos(found.start);
-    app.buffer_mut().cursor_mut().move_to(position, false);
+    app.window_mut().cursor_mut().move_to(position, false);
 }
 
 /// Leave search mode and put the caret back where it started.
 fn cancel_search(app: &mut App) -> Result<()> {
     let origin = app.search.origin();
     let position = app.buffer().document.char_to_pos(origin);
-    app.buffer_mut().cursor_mut().move_to(position, false);
+    app.window_mut().cursor_mut().move_to(position, false);
     app.search.set_query(String::new());
     enter_mode(app, Mode::Normal);
     Ok(())
@@ -228,7 +229,7 @@ fn repeat_search(app: &mut App, forward: bool) {
         return;
     };
     let position = app.buffer().document.char_to_pos(found.start);
-    app.buffer_mut().cursor_mut().move_to(position, false);
+    app.window_mut().cursor_mut().move_to(position, false);
 }
 
 /// Show or hide the file tree, focusing it when it appears.
@@ -296,16 +297,16 @@ fn enter_mode(app: &mut App, mode: Mode) {
     }
     // A mode change always ends an undo step: undoing should return to the
     // state before this burst of typing, not the middle of it.
-    app.buffer_mut().checkpoint();
+    app.edit().checkpoint();
 
     match mode {
         Mode::Normal => {
-            app.buffer_mut().collapse_selections();
+            app.window_mut().collapse_selections();
             // Normal mode's caret sits *on* a character, so a caret parked past
             // the end of a line in insert mode has to come back.
-            app.buffer_mut().clamp_cursors(false);
+            app.clamp_cursors(false);
         }
-        Mode::Visual | Mode::VisualLine => app.buffer_mut().anchor_selections(),
+        Mode::Visual | Mode::VisualLine => app.window_mut().anchor_selections(),
         Mode::Command => app.command_line.clear(),
         Mode::Insert | Mode::Search | Mode::Tree => {}
     }
@@ -316,13 +317,13 @@ fn enter_mode(app: &mut App, mode: Mode) {
 fn move_cursors(app: &mut App, motion: Motion, extend: bool) {
     let allow_eol = app.mode.is_insert();
     let extend = extend || app.mode.is_visual();
-    app.buffer_mut().checkpoint();
-    app.buffer_mut().move_cursors(motion, extend, allow_eol);
+    app.edit().checkpoint();
+    app.move_cursors(motion, extend, allow_eol);
 }
 
 /// Move a whole or half screen.
 fn page(app: &mut App, down: bool, half: bool) {
-    let height = usize::from(app.viewport_height).max(1);
+    let height = usize::from(app.window().height).max(1);
     let distance = if half { height / 2 } else { height }.max(1);
     let motion = if down {
         Motion::Down(distance)
@@ -335,17 +336,17 @@ fn page(app: &mut App, down: bool, half: bool) {
 /// The span an operator applies to: the selection in visual mode, the current
 /// line otherwise.
 fn target_range(app: &App) -> (Range, bool) {
-    let buffer = app.buffer();
-    let cursor = buffer.cursor();
+    let document = &app.buffer().document;
+    let cursor = app.window().cursor();
     match app.mode {
-        Mode::Visual => (Range::of(&cursor, &buffer.document), false),
-        _ => (Range::of_lines(&cursor, &buffer.document), true),
+        Mode::Visual => (Range::of(&cursor, document), false),
+        _ => (Range::of_lines(&cursor, document), true),
     }
 }
 
 fn delete_target(app: &mut App) {
     let (range, _) = target_range(app);
-    app.buffer_mut().delete_range(range);
+    app.edit().delete_range(range);
     enter_mode(app, Mode::Normal);
 }
 
@@ -359,7 +360,7 @@ fn yank(app: &mut App, cut: bool) {
     app.clipboard.set(text, line_wise);
 
     if cut {
-        app.buffer_mut().delete_range(range);
+        app.edit().delete_range(range);
     }
     enter_mode(app, Mode::Normal);
     app.info(format!(
@@ -376,7 +377,7 @@ fn paste(app: &mut App) {
         return;
     }
     let line_wise = app.clipboard.is_line_wise();
-    app.buffer_mut().paste(&text, line_wise);
+    app.edit().paste(&text, line_wise);
     enter_mode(app, Mode::Normal);
 }
 
@@ -390,22 +391,22 @@ fn open_line(app: &mut App, below: bool) {
     } else {
         Motion::LineFirstNonBlank
     };
-    app.buffer_mut().move_cursors(motion, false, true);
+    app.move_cursors(motion, false, true);
 
-    let (buffer, config) = app.buffer_and_config();
-    buffer.insert_newline(config);
+    let (mut edit, config) = app.edit_and_config();
+    edit.insert_newline(config);
     if !below {
         // The split pushed the original text down; step back onto the blank
         // line that is now above it.
-        buffer.move_cursors(Motion::Up(1), false, true);
+        edit.window
+            .move_cursors(Motion::Up(1), &edit.buffer.document, false, true);
     }
 }
 
 /// Duplicate the primary cursor onto the neighbouring line.
 fn add_cursor(app: &mut App, below: bool) {
-    let buffer = app.buffer_mut();
-    let mut cursor = buffer.cursor();
-    let last = buffer.document.last_line();
+    let mut cursor = app.window().cursor();
+    let last = app.buffer().document.last_line();
 
     let line = if below {
         (cursor.head.line + 1).min(last)
@@ -415,17 +416,17 @@ fn add_cursor(app: &mut App, below: bool) {
     if line == cursor.head.line {
         return;
     }
-    let position = buffer.document.clamp(
+    let position = app.buffer().document.clamp(
         crate::editor::cursor::Position::new(line, cursor.goal_col()),
         false,
     );
     cursor.move_to(position, false);
-    buffer.add_cursor(cursor);
+    app.window_mut().add_cursor(cursor);
 }
 
 fn save(app: &mut App) {
     if app.config.trim_trailing_whitespace {
-        app.buffer_mut().trim_trailing_whitespace();
+        app.edit().trim_trailing_whitespace();
     }
     match app.buffer_mut().document.save() {
         Ok(()) => {

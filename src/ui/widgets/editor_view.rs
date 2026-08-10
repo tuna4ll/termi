@@ -18,6 +18,7 @@ use ratatui::widgets::Widget;
 use crate::config::Config;
 use crate::editor::buffer::Buffer;
 use crate::editor::selection::Range;
+use crate::editor::window::Window;
 use crate::search::{LineMatch, Search};
 use crate::syntax::Highlight;
 use crate::theme::Theme;
@@ -36,20 +37,21 @@ pub fn gutter_width(config: &Config, line_count: usize) -> u16 {
     digits.max(3) + 2
 }
 
-/// Scroll the buffer's view so the primary caret is on screen.
+/// Scroll a window so its primary caret is on screen.
 ///
 /// Lives here rather than in `View` because the amount of usable width depends
 /// on the gutter, and the caret's *display* column depends on tab expansion —
-/// both of which are rendering concerns.
-pub fn scroll_into_view(buffer: &mut Buffer, config: &Config, area: Rect) {
+/// both of which are rendering concerns. The buffer comes in separately because
+/// scrolling changes the window and only reads the text.
+pub fn scroll_into_view(buffer: &Buffer, window: &mut Window, config: &Config, area: Rect) {
     let gutter = gutter_width(config, buffer.document.len_lines());
     let width = usize::from(area.width.saturating_sub(gutter));
     let height = usize::from(area.height);
-    let head = buffer.cursor().head;
+    let head = window.cursor().head;
 
     if !config.word_wrap {
         let line = DisplayLine::new(&buffer.document.line_string(head.line), config.tab_width);
-        buffer.view.scroll_to(
+        window.view.scroll_to(
             head.line,
             line.column_of(head.col),
             height,
@@ -62,9 +64,9 @@ pub fn scroll_into_view(buffer: &mut Buffer, config: &Config, area: Rect) {
     // With wrapping, a line is worth an unknown number of rows, so "does the
     // caret fit?" has to be measured instead of computed. Walking the top of the
     // view forward one line at a time is bounded by the window height.
-    buffer.view.left_col = 0;
-    if head.line < buffer.view.top_line {
-        buffer.view.top_line = head.line;
+    window.view.left_col = 0;
+    if head.line < window.view.top_line {
+        window.view.top_line = head.line;
     }
     if width == 0 || height == 0 {
         return;
@@ -74,12 +76,12 @@ pub fn scroll_into_view(buffer: &mut Buffer, config: &Config, area: Rect) {
             .wrap(width)
             .len()
     };
-    while buffer.view.top_line < head.line {
-        let rows: usize = (buffer.view.top_line..=head.line).map(rows_of).sum();
+    while window.view.top_line < head.line {
+        let rows: usize = (window.view.top_line..=head.line).map(rows_of).sum();
         if rows <= height {
             break;
         }
-        buffer.view.top_line += 1;
+        window.view.top_line += 1;
     }
 }
 
@@ -102,6 +104,11 @@ struct Row {
 pub struct EditorView<'a> {
     /// Buffer to draw.
     pub buffer: &'a Buffer,
+    /// The window looking at it, which supplies the scroll offset and cursors.
+    pub window: &'a Window,
+    /// Whether this window has the keyboard, so the caret line is only
+    /// highlighted where typing would land.
+    pub focused: bool,
     /// Colours.
     pub theme: &'a Theme,
     /// Tab width, gutter and highlight settings.
@@ -119,8 +126,8 @@ impl EditorView<'_> {
     /// of view.
     #[must_use]
     pub fn caret_position(&self, area: Rect) -> Option<(u16, u16)> {
-        let head = self.buffer.cursor().head;
-        let view = self.buffer.view;
+        let head = self.window.cursor().head;
+        let view = self.window.view;
         let gutter = gutter_width(self.config, self.buffer.document.len_lines());
         let width = usize::from(area.width.saturating_sub(gutter));
         let height = usize::from(area.height);
@@ -213,7 +220,9 @@ impl EditorView<'_> {
         let x0 = area.x + gutter;
         let width = area.width.saturating_sub(gutter);
 
-        let base = if line == caret && self.config.highlight_current_line {
+        // Only the focused window highlights its caret line: with splits open,
+        // two highlighted lines would leave the caret's whereabouts ambiguous.
+        let base = if line == caret && self.config.highlight_current_line && self.focused {
             self.theme.text.patch(self.theme.cursor_line)
         } else {
             self.theme.text
@@ -333,8 +342,8 @@ impl EditorView<'_> {
 
     /// One document line per screen row, scrolled horizontally.
     fn render_unwrapped(&self, surface: &mut Surface, area: Rect, caret: usize) {
-        let top = self.buffer.view.top_line;
-        let left = self.buffer.view.left_col;
+        let top = self.window.view.top_line;
+        let left = self.window.view.left_col;
 
         for row in 0..area.height {
             let line = top + usize::from(row);
@@ -365,7 +374,7 @@ impl EditorView<'_> {
                 .saturating_sub(gutter_width(self.config, self.buffer.document.len_lines())),
         );
         let mut row = 0u16;
-        let mut line = self.buffer.view.top_line;
+        let mut line = self.window.view.top_line;
 
         while row < area.height {
             if line >= self.buffer.document.len_lines() {
@@ -417,7 +426,7 @@ impl Widget for EditorView<'_> {
             return;
         }
         surface.set_style(area, self.theme.text);
-        let caret = self.buffer.cursor().head.line;
+        let caret = self.window.cursor().head.line;
 
         if self.config.word_wrap {
             self.render_wrapped(surface, area, caret);
