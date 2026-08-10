@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Split windows** — the screen can be divided any number of ways, horizontally
+  and vertically, with `Ctrl+W` followed by `s`, `v`, `c`, `o`, `w`, a motion key
+  or one of `+ - < > =`. `:split`, `:vsplit`, `:close` and `:only` do the same
+  from the command line, and `:q` now closes the focused window before it
+  closes the buffer.
+- The same file can be open in several windows at once, each scrolled where it
+  likes and carrying its own cursors, while sharing one text and one undo
+  history — an edit in one window shows up in the others as it is typed.
+- Each window remembers where it was in every buffer it has shown, so switching
+  files and coming back returns to the same line rather than the top.
+- **Mouse** — clicking a window focuses it and the wheel scrolls whichever
+  window is under the pointer. Set `mouse = false` to leave the mouse to the
+  terminal.
+
+### Changed
+
+- A buffer is now the file — its text, undo history and highlighting — and a
+  window is the view onto one. Cursors and the scroll position moved from the
+  first to the second.
+
+### Fixed
+
+- `:%s/…/…/g` left the syntax highlighter holding state derived from the text it
+  had just replaced, so colours below the substitution could be wrong until the
+  file was reloaded.
+- Scrolling without moving the caret (`Ctrl+E`, and now the wheel) snapped
+  straight back on the next frame once the caret left the window. The caret is
+  now carried along at the edge instead.
+
 ## [0.1.1] - 2026-08-08
 
 ### Fixed

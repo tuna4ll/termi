@@ -28,8 +28,12 @@ MOVE      h j k l     w b e words     0 ^ $ line     gg G file
 EDIT      x delete    dd line     yy yank    p paste    u undo
 SEARCH    / next      ? previous      n / N repeat
 FILES     Ctrl+B tree     Ctrl+N / Ctrl+P buffers     Ctrl+S save
+WINDOWS   Ctrl+W then     s / v split     c close     o only
+                          h j k l focus   w next      = even
+                          + - taller      < > wider
 
 COMMANDS  :w [path]  :q[!]  :wq  :e[!] path  :bn  :bp
+          :sp  :vs  :clo  :on
           :set <option> [value]     :theme <name>     :<line>
           :%s/pattern/replacement/g";
 

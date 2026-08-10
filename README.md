@@ -46,6 +46,12 @@ does not rescan it.
 (`Ctrl+B`), atomic saves, and a watcher that reloads clean buffers when they
 change on disk and warns rather than clobbers when they do not.
 
+**Windows** — split the screen as many ways as you like (`Ctrl+W s` / `Ctrl+W
+v`). A buffer holds the text, the undo history and the highlighting; a window
+holds a viewport and its cursors. The same file can therefore be open in two
+windows at once, scrolled to different places, with an edit in one appearing
+immediately in the other and a single undo stack behind both.
+
 **Looks** — dark and light themes built in, plus TOML themes that override only
 the slots you care about.
 
@@ -63,11 +69,16 @@ Press `:help` inside the editor for the same list.
 | `Alt+↑` `Alt+↓` `Esc` | add a cursor above/below, collapse to one |
 | `Ctrl+B` | file tree |
 | `Ctrl+N` `Ctrl+P` | next / previous buffer |
+| `Ctrl+W` `s` `v` | split the window across / down |
+| `Ctrl+W` `h j k l` `w` | move the focus between windows |
+| `Ctrl+W` `c` `o` | close this window / close all the others |
+| `Ctrl+W` `+` `-` `<` `>` `=` | resize windows, or even them up |
 | `Ctrl+S` `Ctrl+Q` | save, quit |
 | `:` | command line |
 
 Commands: `:w [path]` `:q[!]` `:wq` `:e[!] path` `:bn` `:bp` `:<line>`
-`:set <option> [value]` `:theme <name>` `:%s/pattern/replacement/g`
+`:sp` `:vs` `:clo` `:on` `:set <option> [value]` `:theme <name>`
+`:%s/pattern/replacement/g`
 
 ## Configuration
 
@@ -98,7 +109,9 @@ app/         event loop, state, action dispatch, ex commands
     ├── document/   rope, file, dirty state, indentation
     ├── cursor/     positions, motions, word boundaries
     ├── selection/  character ranges
-    ├── buffer/     document + cursors + viewport + history
+    ├── buffer/     a file: document + history + highlighting
+    ├── window/     a view: viewport + cursors, and the split tree
+    ├── edit/       changes a buffer's text through a window
     └── command/    ex-command parsing
 
 config/  theme/  syntax/  search/  undo/  clipboard/  filesystem/
