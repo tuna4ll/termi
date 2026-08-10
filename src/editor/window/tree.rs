@@ -182,7 +182,16 @@ impl Windows {
     pub fn split(&mut self, axis: Axis) -> WindowId {
         let clone = self.focused().clone();
         let fresh = self.insert_window(clone);
-        insert_beside(&mut self.root, self.focus, fresh, axis);
+        let placed = insert_beside(&mut self.root, self.focus, fresh, axis);
+        // The focused window is a leaf of the tree by construction. If that ever
+        // stopped holding, the new window would exist without being drawn and
+        // the keyboard would be aimed at something invisible, so undo the half
+        // of the split that did happen rather than leave that behind.
+        debug_assert!(placed, "the focused window should be a leaf of the tree");
+        if !placed {
+            self.slots[fresh] = None;
+            return self.focus;
+        }
         self.focus = fresh;
         fresh
     }
@@ -216,9 +225,11 @@ impl Windows {
 
     /// Close every window except the focused one.
     pub fn close_others(&mut self) {
-        for id in self.ids() {
+        // Every slot rather than every leaf of the tree: the two agree, and
+        // sweeping the list directly means they cannot drift apart here.
+        for (id, slot) in self.slots.iter_mut().enumerate() {
             if id != self.focus {
-                self.slots[id] = None;
+                *slot = None;
             }
         }
         self.root = Node::Leaf(self.focus);
