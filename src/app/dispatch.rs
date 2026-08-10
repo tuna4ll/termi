@@ -502,3 +502,276 @@ fn quit(app: &mut App) {
         app.quit();
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+    use crate::editor::buffer::Buffer;
+    use crate::editor::document::Document;
+    use crate::editor::window::{Area, Axis, Side};
+
+    /// An editor that reads neither the installed configuration nor the system
+    /// clipboard, so these behave the same on every machine.
+    fn app() -> App {
+        App::with_config(Config {
+            system_clipboard: false,
+            ..Config::default()
+        })
+    }
+
+    fn press(app: &mut App, action: Action) {
+        apply(app, action).expect("dispatching should not fail");
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        press(app, Action::EnterMode(Mode::Insert));
+        for ch in text.chars() {
+            if ch == '\n' {
+                press(app, Action::InsertNewline);
+            } else {
+                press(app, Action::Insert(ch));
+            }
+        }
+        press(app, Action::EnterMode(Mode::Normal));
+    }
+
+    fn text_of(app: &App) -> String {
+        app.buffer().document.text().to_string()
+    }
+
+    /// The window that is not the focused one.
+    fn other_window(app: &App) -> WindowId {
+        app.windows
+            .ids()
+            .into_iter()
+            .find(|id| *id != app.windows.focus())
+            .expect("there should be a second window")
+    }
+
+    /// Put two windows side by side with the areas a render would have given
+    /// them, which is what the geometry-driven commands read.
+    fn side_by_side(app: &mut App) -> (WindowId, WindowId) {
+        let right = app.windows.split(Axis::Horizontal);
+        let left = app.windows.ids()[0];
+        app.windows.get_mut(left).area = Area::new(0, 0, 40, 20);
+        app.windows.get_mut(right).area = Area::new(41, 0, 40, 20);
+        (left, right)
+    }
+
+    #[test]
+    fn splitting_gives_two_windows_on_one_buffer() {
+        let mut app = app();
+        type_text(&mut app, "shared");
+        press(
+            &mut app,
+            Action::SplitWindow {
+                axis: Axis::Horizontal,
+            },
+        );
+
+        assert_eq!(app.windows.count(), 2);
+        assert_eq!(app.buffers.len(), 1);
+        let other = other_window(&app);
+        assert_eq!(app.windows.get(other).buffer, app.window().buffer);
+    }
+
+    #[test]
+    fn typing_in_one_window_changes_the_file_the_other_shows() {
+        let mut app = app();
+        press(
+            &mut app,
+            Action::SplitWindow {
+                axis: Axis::Horizontal,
+            },
+        );
+        type_text(&mut app, "hello");
+
+        let other = other_window(&app);
+        let buffer = app.windows.get(other).buffer;
+        assert_eq!(app.buffers[buffer].document.text().to_string(), "hello");
+    }
+
+    #[test]
+    fn each_window_keeps_its_own_caret() {
+        let mut app = app();
+        type_text(&mut app, "one\ntwo\nthree");
+        press(&mut app, Action::Move(Motion::DocStart));
+        press(
+            &mut app,
+            Action::SplitWindow {
+                axis: Axis::Vertical,
+            },
+        );
+
+        let other = other_window(&app);
+        let before = app.windows.get(other).cursor().head;
+        press(&mut app, Action::Move(Motion::Down(1)));
+
+        assert_ne!(app.window().cursor().head, before);
+        assert_eq!(
+            app.windows.get(other).cursor().head,
+            before,
+            "the window that was not moved in should not have moved"
+        );
+    }
+
+    #[test]
+    fn undo_reaches_across_windows_on_one_file() {
+        let mut app = app();
+        type_text(&mut app, "typed");
+        press(
+            &mut app,
+            Action::SplitWindow {
+                axis: Axis::Horizontal,
+            },
+        );
+        // The new window undoes an edit made through the other one, because the
+        // history belongs to the file rather than to the view of it.
+        press(&mut app, Action::Undo);
+        assert_eq!(text_of(&app), "");
+    }
+
+    #[test]
+    fn the_focus_moves_to_a_neighbouring_window() {
+        let mut app = app();
+        let (left, right) = side_by_side(&mut app);
+        app.windows.set_focus(left);
+
+        press(&mut app, Action::FocusWindow(Side::Right));
+        assert_eq!(app.windows.focus(), right);
+
+        press(&mut app, Action::FocusWindow(Side::Right));
+        assert_eq!(app.windows.focus(), right, "no neighbour, no movement");
+    }
+
+    #[test]
+    fn a_click_focuses_the_window_under_it() {
+        let mut app = app();
+        let (left, right) = side_by_side(&mut app);
+
+        press(&mut app, Action::FocusAt { x: 10, y: 4 });
+        assert_eq!(app.windows.focus(), left);
+        press(&mut app, Action::FocusAt { x: 60, y: 4 });
+        assert_eq!(app.windows.focus(), right);
+    }
+
+    #[test]
+    fn leaving_a_window_settles_the_mode_it_was_left_in() {
+        let mut app = app();
+        type_text(&mut app, "text");
+        let (left, right) = side_by_side(&mut app);
+        app.windows.set_focus(left);
+
+        press(&mut app, Action::EnterMode(Mode::Visual));
+        press(&mut app, Action::FocusWindow(Side::Right));
+
+        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(app.windows.focus(), right);
+    }
+
+    #[test]
+    fn closing_a_window_leaves_its_buffer_open() {
+        let mut app = app();
+        type_text(&mut app, "kept");
+        press(
+            &mut app,
+            Action::SplitWindow {
+                axis: Axis::Horizontal,
+            },
+        );
+        press(&mut app, Action::CloseWindow);
+
+        assert_eq!(app.windows.count(), 1);
+        assert_eq!(app.buffers.len(), 1);
+        assert_eq!(text_of(&app), "kept");
+    }
+
+    #[test]
+    fn the_last_window_refuses_to_close() {
+        let mut app = app();
+        press(&mut app, Action::CloseWindow);
+        assert_eq!(app.windows.count(), 1);
+        assert!(!app.should_quit());
+    }
+
+    #[test]
+    fn quit_closes_a_window_before_it_closes_anything_else() {
+        let mut app = app();
+        press(
+            &mut app,
+            Action::SplitWindow {
+                axis: Axis::Vertical,
+            },
+        );
+
+        commands::run(&mut app, "q");
+        assert_eq!(app.windows.count(), 1);
+        assert!(!app.should_quit());
+
+        commands::run(&mut app, "q");
+        assert!(app.should_quit());
+    }
+
+    #[test]
+    fn only_collapses_the_layout_to_the_focused_window() {
+        let mut app = app();
+        press(
+            &mut app,
+            Action::SplitWindow {
+                axis: Axis::Horizontal,
+            },
+        );
+        press(
+            &mut app,
+            Action::SplitWindow {
+                axis: Axis::Vertical,
+            },
+        );
+        assert_eq!(app.windows.count(), 3);
+
+        let kept = app.windows.focus();
+        commands::run(&mut app, "only");
+        assert_eq!(app.windows.count(), 1);
+        assert_eq!(app.windows.focus(), kept);
+    }
+
+    #[test]
+    fn closing_a_buffer_repairs_every_window() {
+        let mut app = app();
+        app.buffers
+            .push(Buffer::new(Document::from_text("second", None)));
+        press(
+            &mut app,
+            Action::SplitWindow {
+                axis: Axis::Horizontal,
+            },
+        );
+        app.windows.focused_mut().show(1);
+        let showed_second = app.windows.focus();
+        let showed_first = other_window(&app);
+
+        app.close_active();
+
+        assert_eq!(app.buffers.len(), 1);
+        assert_eq!(app.windows.get(showed_second).buffer, 0);
+        assert_eq!(app.windows.get(showed_first).buffer, 0);
+    }
+
+    #[test]
+    fn scrolling_carries_the_caret_along_rather_than_snapping_back() {
+        let mut app = app();
+        let lines: String = (0..200).map(|n| format!("line {n}\n")).collect();
+        app.buffers[0] = Buffer::new(Document::from_text(&lines, None));
+        app.windows.focused_mut().reset(0);
+        app.windows.focused_mut().area = Area::new(0, 0, 80, 10);
+
+        press(&mut app, Action::Scroll(40));
+
+        let window = app.window();
+        assert_eq!(window.view.top_line, 40);
+        // The caret started on line 0 and cannot still be there.
+        assert!(window.cursor().head.line >= window.view.top_line);
+        assert!(window.cursor().head.line < window.view.top_line + 10);
+    }
+}

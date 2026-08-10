@@ -87,8 +87,27 @@ impl App {
         let (config, config_error) = Config::load();
         let (theme, theme_error) = Theme::load(&config.theme, &config::themes_dir());
 
+        let mut app = Self::assemble(config, theme);
+        if let Some(message) = config_error.or(theme_error) {
+            app.error(message);
+        }
+        app
+    }
+
+    /// Start from `config` without reading anything from disk.
+    ///
+    /// Test-only: an editor built by [`App::new`] would behave differently
+    /// depending on whose machine it ran on.
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_config(config: Config) -> Self {
+        let theme = Theme::builtin(&config.theme);
+        Self::assemble(config, theme)
+    }
+
+    fn assemble(config: Config, theme: Theme) -> Self {
         let clipboard = Clipboard::new(config.system_clipboard);
-        let mut app = Self {
+        Self {
             mode: Mode::default(),
             config,
             theme,
@@ -103,11 +122,7 @@ impl App {
             tree_visible: false,
             popup: None,
             quit: false,
-        };
-        if let Some(message) = config_error.or(theme_error) {
-            app.error(message);
         }
-        app
     }
 
     /// The buffer the focused window is showing.
