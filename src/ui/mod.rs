@@ -311,3 +311,114 @@ fn status_bar(app: &App) -> StatusBar<'_> {
         theme: &app.theme,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer as Surface;
+
+    use crate::config::Config;
+    use crate::editor::buffer::Buffer as TextBuffer;
+    use crate::editor::document::Document;
+
+    /// An editor holding `text`, with the settings pinned so the frame does not
+    /// change with whatever is installed on the machine running the test.
+    fn app(text: &str) -> App {
+        let mut app = App::with_config(Config {
+            system_clipboard: false,
+            syntax_highlighting: false,
+            line_numbers: false,
+            ..Config::default()
+        });
+        app.buffers[0] = TextBuffer::new(Document::from_text(text, None));
+        app.windows.focused_mut().reset(0);
+        app
+    }
+
+    /// Draw one frame into an off-screen terminal.
+    fn render(app: &mut App, width: u16, height: u16) -> Surface {
+        let mut terminal =
+            Terminal::new(TestBackend::new(width, height)).expect("the test backend always builds");
+        terminal
+            .draw(|frame| draw(frame, app))
+            .expect("drawing into the test backend should not fail");
+        terminal.backend().buffer().clone()
+    }
+
+    fn row(surface: &Surface, y: u16) -> String {
+        (0..surface.area.width)
+            .filter_map(|x| surface.cell((x, y)).map(|cell| cell.symbol().to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn one_window_fills_the_text_area_without_a_rule() {
+        let mut app = app("alpha");
+        let surface = render(&mut app, 40, 10);
+
+        assert!(row(&surface, 0).starts_with("alpha"));
+        for y in 0..8 {
+            assert!(
+                !row(&surface, y).contains('│'),
+                "a single window should not be divided"
+            );
+        }
+    }
+
+    #[test]
+    fn a_side_by_side_split_draws_both_halves_and_the_rule() {
+        let mut app = app("alpha");
+        app.windows.split(Axis::Horizontal);
+        let surface = render(&mut app, 41, 10);
+
+        let first = row(&surface, 0);
+        // Both windows show the same file, so the text appears twice with the
+        // rule between them.
+        assert_eq!(first.matches("alpha").count(), 2, "row was {first:?}");
+        assert!(first.contains('│'), "row was {first:?}");
+    }
+
+    #[test]
+    fn a_stacked_split_draws_a_horizontal_rule() {
+        let mut app = app("alpha");
+        app.windows.split(Axis::Vertical);
+        let surface = render(&mut app, 40, 11);
+
+        let divided = (0..9).any(|y| row(&surface, y).contains('─'));
+        assert!(divided, "a stacked split should be separated by a rule");
+    }
+
+    #[test]
+    fn two_windows_on_one_file_can_sit_at_different_lines() {
+        let text: String = (0..100).map(|n| format!("line {n}\n")).collect();
+        let mut app = app(&text);
+
+        app.windows.split(Axis::Horizontal);
+        // Send the focused window a long way down the file; the other stays put.
+        app.windows.focused_mut().view.top_line = 60;
+        app.move_cursors(crate::editor::cursor::Motion::ToLine(60), false, false);
+
+        let surface = render(&mut app, 41, 10);
+        let first = row(&surface, 0);
+        let (left, right) = first.split_once('│').expect("the rule divides the row");
+
+        // Not the exact line numbers: where the far window lands also depends on
+        // `scrolloff`. What matters is that the two are looking at different
+        // parts of the same file.
+        assert!(left.contains("line 0"), "row was {first:?}");
+        assert!(!right.contains("line 0"), "row was {first:?}");
+        assert_ne!(left.trim(), right.trim());
+    }
+
+    #[test]
+    fn a_terminal_too_small_for_the_chrome_still_draws() {
+        // The status and command bars alone need two rows; anything less has to
+        // shrink the text area rather than panic.
+        let mut app = app("alpha");
+        app.windows.split(Axis::Horizontal);
+        render(&mut app, 4, 2);
+        render(&mut app, 1, 1);
+    }
+}
