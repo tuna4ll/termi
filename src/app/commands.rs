@@ -51,6 +51,15 @@ fn execute(app: &mut App, command: Command) {
                 quit(app, force);
             }
         }
+        Command::Split { axis } => {
+            app.windows.split(axis);
+        }
+        Command::CloseWindow => {
+            if !app.windows.close(app.windows.focus()) {
+                app.info("only one window");
+            }
+        }
+        Command::OnlyWindow => app.windows.close_others(),
         Command::Edit { path, force } => edit(app, path, force),
         Command::Reload => reload(app),
         Command::GotoLine(line) => app.move_cursors(Motion::ToLine(line), false, false),
@@ -85,8 +94,15 @@ fn write(app: &mut App, path: Option<PathBuf>) {
     }
 }
 
-/// `:q` closes the buffer; closing the last one leaves the editor.
+/// `:q` closes the window, then the buffer, then the editor.
+///
+/// Closing a window is always safe — the buffer stays open behind it — so the
+/// unsaved-changes check only applies once this is the last view of the file.
 fn quit(app: &mut App, force: bool) {
+    if app.windows.count() > 1 {
+        app.windows.close(app.windows.focus());
+        return;
+    }
     if !force && app.buffer().document.is_dirty() {
         app.error("unsaved changes — use :q! to discard them");
         return;
@@ -197,7 +213,7 @@ fn substitute(app: &mut App, pattern: &str, replacement: &str, all: bool, whole_
         line..line + 1
     };
 
-    let index = app.window.buffer;
+    let index = app.window().buffer;
     let App {
         buffers, search, ..
     } = app;

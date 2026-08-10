@@ -14,11 +14,25 @@
 //! **Public API:** [`normal`], [`insert`], [`visual`], [`command`],
 //! [`pending`].
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use super::{Action, is_ctrl, is_plain};
+use super::{Action, Pending, is_ctrl, is_plain};
 use crate::app::mode::Mode;
 use crate::editor::cursor::Motion;
+use crate::editor::window::{Axis, Side};
+
+/// Start the `Ctrl+W` window sequence, if that is what this key is.
+///
+/// Checked in the modes where a chord cannot be text. Insert mode is left out
+/// on purpose: nothing there would survive swallowing a keystroke to wait for a
+/// second one.
+fn window_prefix(key: KeyEvent, pending: &mut Option<Pending>) -> bool {
+    if is_ctrl(key.modifiers) && key.code == KeyCode::Char('w') {
+        *pending = Some(Pending::Window);
+        return true;
+    }
+    false
+}
 
 /// Bindings shared by every mode: window-level keys that must always work.
 fn universal(key: KeyEvent) -> Option<Action> {
@@ -70,7 +84,10 @@ fn motion(key: KeyEvent) -> Option<Motion> {
 /// Normal mode: keys are commands.
 ///
 /// `pending` is set when a key only makes sense as the first half of a sequence.
-pub fn normal(key: KeyEvent, pending: &mut Option<char>) -> Action {
+pub fn normal(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
+    if window_prefix(key, pending) {
+        return Action::None;
+    }
     if let Some(action) = universal(key) {
         return action;
     }
@@ -112,7 +129,7 @@ pub fn normal(key: KeyEvent, pending: &mut Option<char>) -> Action {
 
         // Sequences: the second key decides what happens.
         KeyCode::Char(prefix @ ('g' | 'd' | 'y')) => {
-            *pending = Some(prefix);
+            *pending = Some(Pending::Key(prefix));
             Action::None
         }
 
@@ -130,7 +147,15 @@ pub fn normal(key: KeyEvent, pending: &mut Option<char>) -> Action {
 }
 
 /// The second key of a sequence started in normal or visual mode.
-pub fn pending(prefix: char, key: KeyEvent) -> Action {
+pub fn pending(prefix: Pending, key: KeyEvent) -> Action {
+    match prefix {
+        Pending::Key(prefix) => sequence(prefix, key),
+        Pending::Window => window(key),
+    }
+}
+
+/// The second key of a plain two-key sequence.
+fn sequence(prefix: char, key: KeyEvent) -> Action {
     match (prefix, key.code) {
         ('g', KeyCode::Char('g')) => Action::Move(Motion::DocStart),
         ('g', KeyCode::Char('e')) => Action::Move(Motion::DocEnd),
@@ -139,6 +164,77 @@ pub fn pending(prefix: char, key: KeyEvent) -> Action {
         ('g', KeyCode::Char('s')) => Action::Move(Motion::LineFirstNonBlank),
         ('d', KeyCode::Char('d')) => Action::Delete,
         ('y', KeyCode::Char('y')) => Action::Yank,
+        _ => Action::None,
+    }
+}
+
+/// The key after `Ctrl+W`.
+///
+/// The bindings follow vi, including its naming: `s` splits along a horizontal
+/// line and so stacks the windows, while `v` splits along a vertical one and
+/// puts them side by side. Ctrl is ignored, so holding it down through the
+/// whole sequence — `Ctrl+W Ctrl+V` — works as well as letting go.
+fn window(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('s' | 'S') => Action::SplitWindow {
+            axis: Axis::Vertical,
+        },
+        KeyCode::Char('v' | 'V') => Action::SplitWindow {
+            axis: Axis::Horizontal,
+        },
+        KeyCode::Char('c' | 'q') => Action::CloseWindow,
+        KeyCode::Char('o') => Action::OnlyWindow,
+        KeyCode::Char('w') => Action::CycleWindow,
+
+        KeyCode::Char('h') | KeyCode::Left => Action::FocusWindow(Side::Left),
+        KeyCode::Char('j') | KeyCode::Down => Action::FocusWindow(Side::Down),
+        KeyCode::Char('k') | KeyCode::Up => Action::FocusWindow(Side::Up),
+        KeyCode::Char('l') | KeyCode::Right => Action::FocusWindow(Side::Right),
+
+        KeyCode::Char('+') => Action::ResizeWindow {
+            axis: Axis::Vertical,
+            delta: 1,
+        },
+        KeyCode::Char('-') => Action::ResizeWindow {
+            axis: Axis::Vertical,
+            delta: -1,
+        },
+        KeyCode::Char('>') => Action::ResizeWindow {
+            axis: Axis::Horizontal,
+            delta: 1,
+        },
+        KeyCode::Char('<') => Action::ResizeWindow {
+            axis: Axis::Horizontal,
+            delta: -1,
+        },
+        KeyCode::Char('=') => Action::EqualiseWindows,
+        _ => Action::None,
+    }
+}
+
+/// How many lines one notch of the wheel moves.
+const WHEEL_STEP: isize = 3;
+
+/// Mouse events, which are about windows rather than about text.
+///
+/// A click moves the focus and the wheel scrolls; neither places the caret.
+/// Pointing at a window is an unambiguous instruction about *which* window,
+/// while pointing at a character is not — a click inside a wrapped line, a tab
+/// or a double-width glyph lands between positions rather than on one.
+pub fn mouse(event: MouseEvent) -> Action {
+    let (x, y) = (event.column, event.row);
+    match event.kind {
+        MouseEventKind::Down(MouseButton::Left) => Action::FocusAt { x, y },
+        MouseEventKind::ScrollDown => Action::ScrollAt {
+            x,
+            y,
+            delta: WHEEL_STEP,
+        },
+        MouseEventKind::ScrollUp => Action::ScrollAt {
+            x,
+            y,
+            delta: -WHEEL_STEP,
+        },
         _ => Action::None,
     }
 }
@@ -179,7 +275,10 @@ pub fn insert(key: KeyEvent) -> Action {
 }
 
 /// Visual mode: motions extend the selection.
-pub fn visual(key: KeyEvent, pending: &mut Option<char>) -> Action {
+pub fn visual(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
+    if window_prefix(key, pending) {
+        return Action::None;
+    }
     if let Some(action) = universal(key) {
         return action;
     }
@@ -199,7 +298,7 @@ pub fn visual(key: KeyEvent, pending: &mut Option<char>) -> Action {
         KeyCode::Char('p') => Action::Paste,
         KeyCode::Char('i') => Action::EnterMode(Mode::Insert),
         KeyCode::Char('g') => {
-            *pending = Some('g');
+            *pending = Some(Pending::Key('g'));
             Action::None
         }
         KeyCode::PageDown => Action::Page {

@@ -13,13 +13,21 @@ pub mod parser;
 
 use std::path::PathBuf;
 
+use crate::editor::window::Axis;
+
 /// A parsed command line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
     /// `:w [path]` — write the buffer.
     Write(Option<PathBuf>),
-    /// `:q[!]` — close the buffer, or the editor when it is the last one.
+    /// `:q[!]` — close the window, then the buffer, then the editor.
     Quit { force: bool },
+    /// `:sp[lit]` / `:vs[plit]` — divide the focused window in two.
+    Split { axis: Axis },
+    /// `:clo[se]` — close the focused window, keeping the buffer open.
+    CloseWindow,
+    /// `:on[ly]` — close every window except the focused one.
+    OnlyWindow,
     /// `:wq` / `:x` — write and quit.
     WriteQuit { force: bool },
     /// `:e[!] path` — open a file; `force` discards unsaved changes.

@@ -2,13 +2,13 @@
 //!
 //! **Purpose:** the single mutable value that the whole editor operates on.
 //!
-//! **Responsibility:** owns the open buffers, the window looking at them, the
+//! **Responsibility:** owns the open buffers, the windows looking at them, the
 //! mode, the resolved config and theme, and the transient message shown in the
 //! command bar. Every subsystem reads from and writes to this struct; nothing
 //! else in the editor keeps global mutable state.
 //!
 //! Buffers and windows are held side by side rather than nested: a buffer is a
-//! file, a window is a view onto one, and the two have different lifetimes.
+//! file, a window is a view onto one, and several windows can share a buffer.
 //! Everything that needs both at once goes through [`App::edit`].
 //!
 //! **Public API:** [`App`], [`Status`].
@@ -21,10 +21,10 @@ use super::mode::Mode;
 use crate::clipboard::Clipboard;
 use crate::config::{self, Config};
 use crate::editor::buffer::{Buffer, BufferId};
-use crate::editor::cursor::Motion;
+use crate::editor::cursor::{Motion, Position};
 use crate::editor::document::Document;
 use crate::editor::edit::Edit;
-use crate::editor::window::Window;
+use crate::editor::window::{Window, WindowId, Windows};
 use crate::filesystem::tree::Tree;
 use crate::search::Search;
 use crate::theme::Theme;
@@ -49,8 +49,8 @@ pub struct App {
     pub theme: Theme,
     /// Open buffers, in tab order. Never empty.
     pub buffers: Vec<Buffer>,
-    /// The window the keyboard is aimed at.
-    pub window: Window,
+    /// Open windows and the way they divide the screen. Never empty.
+    pub windows: Windows,
     /// Text typed after `:` while in command mode.
     pub command_line: String,
     /// Message shown in the command bar.
@@ -93,7 +93,7 @@ impl App {
             config,
             theme,
             buffers: vec![Buffer::empty()],
-            window: Window::new(0),
+            windows: Windows::new(Window::new(0)),
             command_line: String::new(),
             status: Status::default(),
             clipboard,
@@ -113,43 +113,49 @@ impl App {
     /// The buffer the focused window is showing.
     #[must_use]
     pub fn buffer(&self) -> &Buffer {
-        &self.buffers[self.window.buffer]
+        &self.buffers[self.windows.focused().buffer]
     }
 
     /// Mutable access to the focused buffer.
     pub fn buffer_mut(&mut self) -> &mut Buffer {
-        let index = self.window.buffer;
+        let index = self.windows.focused().buffer;
         &mut self.buffers[index]
     }
 
     /// The focused window.
     #[must_use]
-    pub const fn window(&self) -> &Window {
-        &self.window
+    pub fn window(&self) -> &Window {
+        self.windows.focused()
     }
 
     /// Mutable access to the focused window.
     pub fn window_mut(&mut self) -> &mut Window {
-        &mut self.window
+        self.windows.focused_mut()
     }
 
     /// The focused buffer and window, borrowed together for one edit.
     pub fn edit(&mut self) -> Edit<'_> {
-        let index = self.window.buffer;
-        Edit::new(&mut self.buffers[index], &mut self.window)
+        let index = self.windows.focused().buffer;
+        let Self {
+            buffers, windows, ..
+        } = self;
+        Edit::new(&mut buffers[index], windows.focused_mut())
     }
 
     /// An edit alongside the settings, borrowed as disjoint fields so an
     /// operation can read the config while mutating the text.
     pub fn edit_and_config(&mut self) -> (Edit<'_>, &Config) {
-        let index = self.window.buffer;
+        let index = self.windows.focused().buffer;
         let Self {
             buffers,
-            window,
+            windows,
             config,
             ..
         } = self;
-        (Edit::new(&mut buffers[index], window), config)
+        (
+            Edit::new(&mut buffers[index], windows.focused_mut()),
+            config,
+        )
     }
 
     /// Move every cursor in the focused window.
@@ -157,39 +163,49 @@ impl App {
     /// A window cannot reach its own document, so the two are paired up here
     /// rather than at every call site.
     pub fn move_cursors(&mut self, motion: Motion, extend: bool, allow_eol: bool) {
-        let index = self.window.buffer;
+        let index = self.windows.focused().buffer;
         let Self {
-            buffers, window, ..
+            buffers, windows, ..
         } = self;
-        window.move_cursors(motion, &buffers[index].document, extend, allow_eol);
+        windows
+            .focused_mut()
+            .move_cursors(motion, &buffers[index].document, extend, allow_eol);
     }
 
     /// Pull the focused window's cursors back inside its document.
     pub fn clamp_cursors(&mut self, allow_eol: bool) {
-        let index = self.window.buffer;
+        let index = self.windows.focused().buffer;
         let Self {
-            buffers, window, ..
+            buffers, windows, ..
         } = self;
-        window.clamp_cursors(&buffers[index].document, allow_eol);
+        windows
+            .focused_mut()
+            .clamp_cursors(&buffers[index].document, allow_eol);
     }
 
     /// Pull the cursors of every window showing `buffer` back inside it.
     ///
-    /// A reload or an edit made elsewhere can shrink a file underneath windows
-    /// that did not make the change and are not otherwise told about it.
+    /// An edit made in one window moves the text underneath every other window
+    /// on the same file, and those windows are not otherwise told about it.
     pub fn clamp_windows_on(&mut self, buffer: BufferId) {
-        if self.window.buffer == buffer {
-            self.clamp_cursors(false);
+        let Self {
+            buffers, windows, ..
+        } = self;
+        for (_, window) in windows.iter_mut() {
+            if window.buffer == buffer {
+                window.clamp_cursors(&buffers[buffer].document, false);
+            }
         }
     }
 
-    /// Open `path`, focusing it if it is already open.
+    /// Open `path` in the focused window, reusing the buffer if it is already
+    /// open somewhere.
     ///
     /// # Errors
     /// Returns an error if the file exists but cannot be read.
     pub fn open(&mut self, path: PathBuf) -> Result<()> {
         if let Some(index) = self.index_of(&path) {
-            self.window.show(index);
+            self.windows.focused_mut().show(index);
             return Ok(());
         }
         let buffer = Buffer::new(Document::open(path)?);
@@ -198,45 +214,92 @@ impl App {
         // asked for; replace it rather than accumulating an empty tab.
         if self.buffers.len() == 1 && self.is_scratch(0) {
             self.buffers[0] = buffer;
-            self.window.reset(0);
+            for (_, window) in self.windows.iter_mut() {
+                window.reset(0);
+            }
         } else {
             self.buffers.push(buffer);
-            self.window.show(self.buffers.len() - 1);
+            let last = self.buffers.len() - 1;
+            self.windows.focused_mut().show(last);
         }
         Ok(())
     }
 
     /// Close the focused buffer, keeping at least one open.
+    ///
+    /// Every window is repaired, not just the focused one: buffer ids are
+    /// positions in the buffer list, so closing one renumbers the rest.
     pub fn close_active(&mut self) {
-        let index = self.window.buffer;
+        let index = self.windows.focused().buffer;
         if self.buffers.len() == 1 {
             self.buffers[0] = Buffer::empty();
-            self.window.reset(0);
+            for (_, window) in self.windows.iter_mut() {
+                window.reset(0);
+            }
             return;
         }
         self.buffers.remove(index);
         // After the removal everything above the hole has shifted down, so the
         // buffer that followed the closed one now sits at its index.
         let fallback = index.min(self.buffers.len() - 1);
-        self.window.buffer_removed(index, fallback);
+        for (_, window) in self.windows.iter_mut() {
+            window.buffer_removed(index, fallback);
+        }
     }
 
-    /// Focus the next or previous tab, wrapping around.
+    /// Show the next or previous buffer in the focused window, wrapping around.
     pub fn cycle_buffer(&mut self, forward: bool) {
         let count = self.buffers.len();
-        let current = self.window.buffer;
+        let current = self.windows.focused().buffer;
         let next = if forward {
             (current + 1) % count
         } else {
             (current + count - 1) % count
         };
-        self.window.show(next);
+        self.windows.focused_mut().show(next);
     }
 
     /// Whether any buffer has unsaved changes.
     #[must_use]
     pub fn has_unsaved_changes(&self) -> bool {
         self.buffers.iter().any(|b| b.document.is_dirty())
+    }
+
+    /// Scroll one window, dragging its caret along only far enough to keep it
+    /// on screen.
+    ///
+    /// Without the second half the caret would stay put, and the next frame
+    /// would scroll straight back to it — a view that cannot be moved
+    /// independently of the caret cannot be scrolled at all.
+    pub fn scroll_window(&mut self, id: WindowId, delta: isize) {
+        let index = self.windows.get(id).buffer;
+        let scrolloff = self.config.scrolloff;
+        let Self {
+            buffers, windows, ..
+        } = self;
+        let document = &buffers[index].document;
+        let window = windows.get_mut(id);
+
+        window.view.scroll_lines(delta, document.last_line());
+
+        let height = usize::from(window.area.height).max(1);
+        let margin = scrolloff.min(height.saturating_sub(1) / 2);
+        let top = window.view.top_line;
+        let bottom = (top + height - 1).min(document.last_line());
+
+        // Keep the same margin the renderer would enforce, so the caret does not
+        // land somewhere that immediately scrolls the view again.
+        let lowest = (top + margin).min(bottom);
+        let highest = bottom.saturating_sub(margin).max(lowest);
+
+        let head = window.cursor().head;
+        let line = head.line.clamp(lowest, highest);
+        if line != head.line {
+            let goal = window.cursor().goal_col();
+            let position = document.clamp(Position::new(line, goal), false);
+            window.cursor_mut().move_to(position, false);
+            window.cursor_mut().set_goal_col(goal);
+        }
     }
 
     /// Show an informational message.

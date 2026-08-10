@@ -70,6 +70,12 @@ pub struct Config {
     /// Use the system clipboard for yank and paste. When `false`, an internal
     /// register is used instead.
     pub system_clipboard: bool,
+    /// Let the mouse move the focus between windows and scroll them.
+    ///
+    /// Capturing the mouse takes drag-to-select away from the terminal, so this
+    /// is worth turning off for anyone who selects text that way; most
+    /// terminals still offer it under Shift.
+    pub mouse: bool,
 }
 
 impl Default for Config {
@@ -89,6 +95,7 @@ impl Default for Config {
             watch_files: true,
             trim_trailing_whitespace: false,
             system_clipboard: true,
+            mouse: true,
         }
     }
 }

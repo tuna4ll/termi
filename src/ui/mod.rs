@@ -2,13 +2,15 @@
 //!
 //! **Purpose:** turn application state into a frame.
 //!
-//! **Responsibility:** split the terminal into regions and hand each one to a
-//! widget. The UI layer reads the application state and writes pixels; it never
-//! mutates editing state, with the single exception of scrolling the viewport,
-//! which cannot be decided until the text area's size is known.
+//! **Responsibility:** split the terminal into regions, divide the text area
+//! between the open windows, and hand each region to a widget. The UI layer
+//! reads the application state and writes pixels; it never mutates editing
+//! state, with the single exception of [`prepare`], which cannot run until the
+//! size of each window is known.
 //!
 //! **Public API:** [`draw`], [`Regions`].
 
+pub mod layout;
 pub mod text;
 pub mod widgets;
 
@@ -18,6 +20,10 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use crate::app::App;
 use crate::editor::buffer::Buffer;
 use crate::editor::selection::Range;
+use crate::editor::window::Area;
+use crate::editor::window::tree::Axis;
+use crate::theme::Theme;
+use crate::ui::layout::Panes;
 use crate::ui::widgets::{
     CommandBar, EditorView, FileTree, Popup, SearchBox, StatusBar, Tab, TabBar, editor_view,
 };
@@ -29,7 +35,7 @@ pub struct Regions {
     pub tabs: Option<Rect>,
     /// File tree panel, present only when it is toggled on.
     pub tree: Option<Rect>,
-    /// The text area, gutter included.
+    /// The area the windows divide between them, gutters included.
     pub editor: Rect,
     /// One-line status bar.
     pub status: Rect,
@@ -81,20 +87,11 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let show_tabs = app.config.show_tabs && app.buffers.len() > 1;
     let regions = Regions::split(frame.area(), show_tabs, app.tree_visible);
 
-    prepare(app, regions.editor);
+    let panes = layout::solve(app.windows.root(), regions.editor);
+    prepare(app, &panes);
 
-    let editor = EditorView {
-        buffer: app.buffer(),
-        window: app.window(),
-        focused: true,
-        theme: &app.theme,
-        config: &app.config,
-        selection: selection_range(app),
-        search: app.search.is_active().then_some(&app.search),
-        active_match: active_match(app),
-    };
-    let editor_caret = editor.caret_position(regions.editor);
-    frame.render_widget(editor, regions.editor);
+    let editor_caret = draw_windows(frame, app, &panes);
+    draw_separators(frame, &panes, &app.theme);
 
     if let Some(area) = regions.tabs {
         let tabs: Vec<Tab<'_>> = app
@@ -108,7 +105,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(
             TabBar {
                 tabs: &tabs,
-                active: app.window.buffer,
+                active: app.window().buffer,
                 theme: &app.theme,
             },
             area,
@@ -177,30 +174,92 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
-/// Bring the window up to date with the area it is about to be drawn in.
+/// Bring every window up to date with the area it is about to be drawn in.
 ///
 /// This is the only part of rendering that mutates state, and it has to happen
-/// before the immutable draw pass: the caret cannot be scrolled into view, and
-/// the syntax cache cannot be extended to cover the visible lines, until the
-/// size of the text area is known.
-fn prepare(app: &mut App, area: Rect) {
-    let index = app.window.buffer;
-    app.window.height = area.height;
+/// before the immutable draw pass: no caret can be scrolled into view, and the
+/// syntax cache cannot be extended to cover the visible lines, until the size of
+/// each window is known.
+fn prepare(app: &mut App, panes: &Panes) {
+    let focus = app.windows.focus();
 
-    let App {
-        buffers,
-        window,
-        config,
-        ..
-    } = app;
-    editor_view::scroll_into_view(&buffers[index], window, config, area);
+    for (id, rect) in &panes.windows {
+        let App {
+            buffers,
+            windows,
+            config,
+            ..
+        } = &mut *app;
 
-    if config.syntax_highlighting {
-        let last = window.view.top_line + usize::from(area.height);
-        let Buffer {
-            document, syntax, ..
-        } = &mut buffers[index];
-        syntax.ensure(document, last);
+        let window = windows.get_mut(*id);
+        window.area = Area::new(rect.x, rect.y, rect.width, rect.height);
+        let index = window.buffer;
+
+        // A window that did not make the last edit is never told that the text
+        // moved underneath it, so its cursors are checked here instead. The
+        // focused window is left alone: dispatch has already put its caret
+        // exactly where the current mode wants it.
+        if *id != focus {
+            window.clamp_cursors(&buffers[index].document, false);
+        }
+        editor_view::scroll_into_view(&buffers[index], window, config, *rect);
+
+        // Extend the syntax state cache to cover what is about to be drawn.
+        if config.syntax_highlighting {
+            let last = window.view.top_line + usize::from(rect.height);
+            let Buffer {
+                document, syntax, ..
+            } = &mut buffers[index];
+            syntax.ensure(document, last);
+        }
+    }
+}
+
+/// Draw every window, returning where the caret goes in the focused one.
+fn draw_windows(frame: &mut Frame, app: &App, panes: &Panes) -> Option<(u16, u16)> {
+    let focus = app.windows.focus();
+    let mut caret = None;
+
+    for (id, rect) in &panes.windows {
+        let focused = *id == focus;
+        let window = app.windows.get(*id);
+        let view = EditorView {
+            buffer: &app.buffers[window.buffer],
+            window,
+            focused,
+            theme: &app.theme,
+            config: &app.config,
+            // A selection and the search highlight both belong to the window
+            // being typed in; painting them everywhere would suggest the other
+            // windows were about to act on them too.
+            selection: if focused { selection_range(app) } else { None },
+            search: (focused && app.search.is_active()).then_some(&app.search),
+            active_match: if focused { active_match(app) } else { None },
+        };
+        if focused {
+            caret = view.caret_position(*rect);
+        }
+        frame.render_widget(view, *rect);
+    }
+    caret
+}
+
+/// Draw the rules between neighbouring windows.
+fn draw_separators(frame: &mut Frame, panes: &Panes, theme: &Theme) {
+    let surface = frame.buffer_mut();
+    for (rect, axis) in &panes.separators {
+        // A split that divides the width is separated by a vertical rule.
+        let glyph = match axis {
+            Axis::Horizontal => '│',
+            Axis::Vertical => '─',
+        };
+        for y in rect.top()..rect.bottom() {
+            for x in rect.left()..rect.right() {
+                if let Some(cell) = surface.cell_mut((x, y)) {
+                    cell.set_char(glyph).set_style(theme.gutter);
+                }
+            }
+        }
     }
 }
 

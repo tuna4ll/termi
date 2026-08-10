@@ -15,7 +15,9 @@ use std::panic;
 
 use anyhow::Result;
 use crossterm::cursor::{SetCursorStyle, Show};
-use crossterm::event::{DisableBracketedPaste, EnableBracketedPaste};
+use crossterm::event::{
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+};
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
 };
@@ -38,13 +40,18 @@ impl Tui {
     /// # Errors
     /// Returns an error if the terminal cannot be switched into raw mode or the
     /// alternate screen, which usually means stdout is not a tty.
-    pub fn new() -> Result<Self> {
+    pub fn new(mouse: bool) -> Result<Self> {
         enable_raw_mode()?;
         let mut stdout = io::stdout();
         // Bracketed paste turns a paste into one `Event::Paste` instead of a
         // burst of key presses — without it, pasted text triggers auto-indent on
         // every line and arrives mangled.
         execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+        // Capturing the mouse costs the terminal's own drag-to-select, so it is
+        // only taken when the user has left it switched on.
+        if mouse {
+            execute!(stdout, EnableMouseCapture)?;
+        }
         let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
         Ok(Self { terminal })
     }
@@ -97,8 +104,11 @@ impl Drop for Tui {
 /// # Errors
 /// Returns an error if the terminal state cannot be reset.
 pub fn restore() -> io::Result<()> {
+    // Disabling mouse capture unconditionally: it is harmless when it was never
+    // enabled, and this path has to work even when setup failed halfway.
     execute!(
         io::stdout(),
+        DisableMouseCapture,
         DisableBracketedPaste,
         LeaveAlternateScreen,
         SetCursorStyle::DefaultUserShape,

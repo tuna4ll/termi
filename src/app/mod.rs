@@ -61,6 +61,10 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
                 let action = input.handle(key, app.mode);
                 dispatch::apply(app, action)?;
             }
+            Event::Mouse(mouse) => {
+                let action = input.handle_mouse(mouse);
+                dispatch::apply(app, action)?;
+            }
             Event::Paste(text) => {
                 let mut edit = app.edit();
                 edit.insert_text(&text);

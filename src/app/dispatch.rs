@@ -21,6 +21,7 @@ use super::state::App;
 use crate::editor::cursor::Motion;
 use crate::editor::document::indent;
 use crate::editor::selection::Range;
+use crate::editor::window::WindowId;
 use crate::input::Action;
 
 /// Apply one action to the editor.
@@ -48,8 +49,8 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::Move(motion) => move_cursors(app, motion, false),
         Action::Extend(motion) => move_cursors(app, motion, true),
         Action::Scroll(delta) => {
-            let last = app.buffer().document.last_line();
-            app.window_mut().view.scroll_lines(delta, last);
+            let focus = app.windows.focus();
+            app.scroll_window(focus, delta);
         }
         Action::Page { down, half } => page(app, down, half),
 
@@ -108,6 +109,30 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::CycleBuffer { forward } => app.cycle_buffer(forward),
         Action::Save => save(app),
         Action::Quit => quit(app),
+
+        Action::SplitWindow { axis } => {
+            app.windows.split(axis);
+        }
+        Action::CloseWindow => close_window(app),
+        Action::OnlyWindow => app.windows.close_others(),
+        Action::FocusWindow(side) => {
+            if let Some(id) = app.windows.neighbour(side) {
+                focus_window(app, id);
+            }
+        }
+        Action::CycleWindow => cycle_window(app),
+        Action::ResizeWindow { axis, delta } => app.windows.resize(axis, delta),
+        Action::EqualiseWindows => app.windows.equalise(),
+        Action::FocusAt { x, y } => {
+            if let Some(id) = app.windows.at(x, y) {
+                focus_window(app, id);
+            }
+        }
+        Action::ScrollAt { x, y, delta } => {
+            if let Some(id) = app.windows.at(x, y) {
+                app.scroll_window(id, delta);
+            }
+        }
 
         Action::ToggleTree => toggle_tree(app),
         Action::TreeMove(delta) => move_tree_selection(app, delta),
@@ -232,6 +257,39 @@ fn repeat_search(app: &mut App, forward: bool) {
     app.window_mut().cursor_mut().move_to(position, false);
 }
 
+/// Close the focused window, keeping its buffer open.
+///
+/// Nothing is at risk here: the buffer stays in the list whether or not it was
+/// saved, so unlike `:q` this never needs a `!`.
+fn close_window(app: &mut App) {
+    let focus = app.windows.focus();
+    if !app.windows.close(focus) {
+        app.info("only one window");
+    }
+}
+
+/// Hand the keyboard to another window.
+fn focus_window(app: &mut App, id: WindowId) {
+    if id == app.windows.focus() {
+        return;
+    }
+    // Settle the window being left first: a selection, and a caret sitting past
+    // the end of a line, both belong to the mode it is being left in.
+    enter_mode(app, Mode::Normal);
+    app.windows.set_focus(id);
+}
+
+/// Move the focus to the next window in screen order, wrapping around.
+fn cycle_window(app: &mut App) {
+    let order = app.windows.ids();
+    let current = order
+        .iter()
+        .position(|id| *id == app.windows.focus())
+        .unwrap_or(0);
+    let next = order[(current + 1) % order.len()];
+    focus_window(app, next);
+}
+
 /// Show or hide the file tree, focusing it when it appears.
 ///
 /// The tree is built on first use and then kept: rebuilding it would collapse
@@ -323,7 +381,7 @@ fn move_cursors(app: &mut App, motion: Motion, extend: bool) {
 
 /// Move a whole or half screen.
 fn page(app: &mut App, down: bool, half: bool) {
-    let height = usize::from(app.window().height).max(1);
+    let height = usize::from(app.window().area.height).max(1);
     let distance = if half { height / 2 } else { height }.max(1);
     let motion = if down {
         Motion::Down(distance)

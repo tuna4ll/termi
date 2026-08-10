@@ -11,6 +11,7 @@
 use std::path::PathBuf;
 
 use super::Command;
+use crate::editor::window::Axis;
 
 /// Parse a command line, without the leading `:`.
 ///
@@ -57,6 +58,16 @@ pub fn parse(input: &str) -> Result<Command, String> {
         },
         "bn" | "bnext" => Ok(Command::CycleBuffer { forward: true }),
         "bp" | "bprev" => Ok(Command::CycleBuffer { forward: false }),
+        // vi names these after the line the split runs along, not after the way
+        // the windows end up stacked; the axis says which the arrangement is.
+        "sp" | "split" | "new" => Ok(Command::Split {
+            axis: Axis::Vertical,
+        }),
+        "vs" | "vsp" | "vsplit" | "vnew" => Ok(Command::Split {
+            axis: Axis::Horizontal,
+        }),
+        "clo" | "close" => Ok(Command::CloseWindow),
+        "on" | "only" => Ok(Command::OnlyWindow),
         "theme" => argument.map_or_else(
             || Err("usage: :theme <name>".to_string()),
             |name| Ok(Command::Theme(name)),
@@ -155,6 +166,32 @@ mod tests {
     fn edit_without_a_path_only_works_as_a_reload() {
         assert_eq!(parse("e!"), Ok(Command::Reload));
         assert!(parse("e").is_err());
+    }
+
+    #[test]
+    fn window_commands_are_not_mistaken_for_a_substitution() {
+        // `:sp` and `:split` both start with the substitute prefix, so the two
+        // syntaxes have to be told apart by what follows it.
+        assert_eq!(
+            parse("sp"),
+            Ok(Command::Split {
+                axis: Axis::Vertical
+            })
+        );
+        assert_eq!(
+            parse("split"),
+            Ok(Command::Split {
+                axis: Axis::Vertical
+            })
+        );
+        assert_eq!(
+            parse("vsplit"),
+            Ok(Command::Split {
+                axis: Axis::Horizontal
+            })
+        );
+        assert_eq!(parse("close"), Ok(Command::CloseWindow));
+        assert_eq!(parse("only"), Ok(Command::OnlyWindow));
     }
 
     #[test]

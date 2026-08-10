@@ -98,7 +98,7 @@ fn edit(files: Vec<PathBuf>) -> Result<()> {
         }
     }
 
-    let mut tui = renderer::Tui::new()?;
+    let mut tui = renderer::Tui::new(editor.config.mouse)?;
     let result = app::run(&mut editor, &mut tui);
     drop(tui);
     result

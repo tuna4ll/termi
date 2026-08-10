@@ -12,10 +12,20 @@
 
 pub mod keymap;
 
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 
 use crate::app::mode::Mode;
 use crate::editor::cursor::Motion;
+use crate::editor::window::{Axis, Side};
+
+/// The first key of a multi-key sequence, held while the second is awaited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pending {
+    /// A plain prefix, such as the `g` of `gg` or the `d` of `dd`.
+    Key(char),
+    /// `Ctrl+W`, which prefixes every window command.
+    Window,
+}
 
 /// Something the user asked the editor to do.
 ///
@@ -77,6 +87,29 @@ pub enum Action {
 
     /// Focus the next or previous buffer.
     CycleBuffer { forward: bool },
+
+    /// Divide the focused window in two.
+    SplitWindow { axis: Axis },
+    /// Close the focused window, leaving its buffer open.
+    CloseWindow,
+    /// Close every window except the focused one.
+    OnlyWindow,
+    /// Move the focus to the neighbouring window on one side.
+    FocusWindow(Side),
+    /// Move the focus to the next window in screen order.
+    CycleWindow,
+    /// Grow or shrink the focused window along one axis.
+    ResizeWindow { axis: Axis, delta: i16 },
+    /// Give every window an equal share of the screen again.
+    EqualiseWindows,
+    /// Aim the keyboard at whichever window covers this cell.
+    ///
+    /// Carried as coordinates rather than a window id because the input layer
+    /// holds no state: only the application knows where the windows are.
+    FocusAt { x: u16, y: u16 },
+    /// Scroll the window covering this cell, focused or not.
+    ScrollAt { x: u16, y: u16, delta: isize },
+
     /// Write the active buffer.
     Save,
     /// Leave the editor.
@@ -119,7 +152,7 @@ pub struct Input {
     ///
     /// Held here rather than in the application state because it is purely an
     /// input-layer concern and must be discarded whenever the mode changes.
-    pending: Option<char>,
+    pending: Option<Pending>,
 }
 
 impl Input {
@@ -141,6 +174,15 @@ impl Input {
             self.pending = None;
         }
         action
+    }
+
+    /// Translate one mouse event.
+    ///
+    /// Reaching for the mouse abandons a half-typed key sequence: the second
+    /// key of `Ctrl+W` is not going to arrive.
+    pub fn handle_mouse(&mut self, event: MouseEvent) -> Action {
+        self.pending = None;
+        keymap::mouse(event)
     }
 }
 

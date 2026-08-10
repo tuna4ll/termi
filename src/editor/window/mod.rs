@@ -15,6 +15,7 @@
 //!
 //! **Public API:** [`Window`], [`View`].
 
+pub mod tree;
 pub mod view;
 
 use std::collections::HashMap;
@@ -23,7 +24,63 @@ use crate::editor::buffer::BufferId;
 use crate::editor::cursor::{Cursor, Motion, Position};
 use crate::editor::document::Document;
 
+pub use tree::{Axis, Side, WindowId, Windows};
 pub use view::View;
+
+/// A rectangle of terminal cells.
+///
+/// Plain numbers rather than the renderer's rectangle type: a window has to
+/// remember where it was drawn — page motions need its height, directional
+/// focus needs its position, and a mouse click needs to be matched against it —
+/// but the editor layer stays free of any dependency on the terminal.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Area {
+    /// Column of the left edge.
+    pub x: u16,
+    /// Row of the top edge.
+    pub y: u16,
+    /// Width in cells.
+    pub width: u16,
+    /// Height in cells.
+    pub height: u16,
+}
+
+impl Area {
+    /// Build an area from its origin and size.
+    #[must_use]
+    pub const fn new(x: u16, y: u16, width: u16, height: u16) -> Self {
+        Self {
+            x,
+            y,
+            width,
+            height,
+        }
+    }
+
+    /// One past the rightmost column.
+    #[must_use]
+    pub const fn right(&self) -> u16 {
+        self.x + self.width
+    }
+
+    /// One past the bottom row.
+    #[must_use]
+    pub const fn bottom(&self) -> u16 {
+        self.y + self.height
+    }
+
+    /// Middle of the area, rounded down.
+    #[must_use]
+    pub const fn centre(&self) -> (u16, u16) {
+        (self.x + self.width / 2, self.y + self.height / 2)
+    }
+
+    /// Whether `(x, y)` falls inside.
+    #[must_use]
+    pub const fn contains(&self, x: u16, y: u16) -> bool {
+        x >= self.x && x < self.right() && y >= self.y && y < self.bottom()
+    }
+}
 
 /// Where a window was looking when it last showed a particular buffer.
 #[derive(Debug, Clone)]
@@ -49,12 +106,12 @@ pub struct Window {
     cursors: Vec<Cursor>,
     /// Index into `cursors` of the one the viewport follows.
     primary: usize,
-    /// Height of this window's text area on the last frame.
+    /// Where this window's text area was on the last frame.
     ///
-    /// Page motions need it and it is only knowable at render time, so the
-    /// renderer records it here for the next key press to use. It is per window
-    /// because two splits are rarely the same height.
-    pub height: u16,
+    /// Only knowable at render time, so the renderer records it here for the
+    /// next key press to use: page motions need the height, moving the focus
+    /// between splits needs the position, and a mouse click needs both.
+    pub area: Area,
     /// Caret and scroll for buffers this window showed earlier.
     ///
     /// Cursors belong to the window now, so without this, switching to another
@@ -73,7 +130,7 @@ impl Window {
             view: View::default(),
             cursors: vec![Cursor::at(Position::ZERO)],
             primary: 0,
-            height: 1,
+            area: Area::new(0, 0, 1, 1),
             anchors: HashMap::new(),
         }
     }
