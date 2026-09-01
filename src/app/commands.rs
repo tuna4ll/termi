@@ -65,6 +65,8 @@ fn execute(app: &mut App, command: Command) {
         }
         Command::OnlyWindow => app.windows.close_others(),
         Command::Edit { path, force } => edit(app, path, force),
+        Command::CreateFile(path) => create_path(app, path, false),
+        Command::CreateDirectory(path) => create_path(app, path, true),
         Command::Reload => reload(app),
         Command::GotoLine(line) => app.move_cursors(Motion::ToLine(line), false, false),
         Command::Set { key, value } => set_option(app, &key, &value),
@@ -77,6 +79,26 @@ fn execute(app: &mut App, command: Command) {
             whole_file,
         } => substitute(app, &pattern, &replacement, all, whole_file),
         Command::Help => app.show_popup("termi", HELP),
+    }
+}
+
+/// Create a filesystem entry and immediately make it visible in an open tree.
+fn create_path(app: &mut App, path: PathBuf, directory: bool) {
+    let result = if directory {
+        crate::filesystem::create_directory(&path)
+    } else {
+        crate::filesystem::create_file(&path)
+    };
+
+    match result {
+        Ok(()) => {
+            if let Some(tree) = app.tree.as_mut() {
+                tree.refresh();
+            }
+            let kind = if directory { "directory" } else { "file" };
+            app.info(format!("created {kind} {}", path.display()));
+        }
+        Err(error) => app.error(error.to_string()),
     }
 }
 

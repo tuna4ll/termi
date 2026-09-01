@@ -56,6 +56,8 @@ pub fn parse(input: &str) -> Result<Command, String> {
             None if force => Ok(Command::Reload),
             None => Err("usage: :e <path>".to_string()),
         },
+        "touch" => required_path(argument, "touch").map(Command::CreateFile),
+        "mkdir" => required_path(argument, "mkdir").map(Command::CreateDirectory),
         "bn" | "bnext" => Ok(Command::CycleBuffer { forward: true }),
         "bp" | "bprev" => Ok(Command::CycleBuffer { forward: false }),
         // vi names these after the line the split runs along, not after the way
@@ -76,6 +78,13 @@ pub fn parse(input: &str) -> Result<Command, String> {
         "help" | "h" => Ok(Command::Help),
         other => Err(format!("unknown command: {other}")),
     }
+}
+
+/// Read the required path shared by filesystem commands.
+fn required_path(argument: Option<String>, command: &str) -> Result<PathBuf, String> {
+    argument
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("usage: :{command} <path>"))
 }
 
 /// `set key value`, where a missing value means "turn it on".
@@ -166,6 +175,20 @@ mod tests {
     fn edit_without_a_path_only_works_as_a_reload() {
         assert_eq!(parse("e!"), Ok(Command::Reload));
         assert!(parse("e").is_err());
+    }
+
+    #[test]
+    fn creation_commands_require_a_path() {
+        assert_eq!(
+            parse("touch src/new file.rs"),
+            Ok(Command::CreateFile(PathBuf::from("src/new file.rs")))
+        );
+        assert_eq!(
+            parse("mkdir src/widgets"),
+            Ok(Command::CreateDirectory(PathBuf::from("src/widgets")))
+        );
+        assert_eq!(parse("touch"), Err("usage: :touch <path>".into()));
+        assert_eq!(parse("mkdir"), Err("usage: :mkdir <path>".into()));
     }
 
     #[test]

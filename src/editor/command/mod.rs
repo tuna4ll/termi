@@ -32,6 +32,10 @@ pub enum Command {
     WriteQuit { force: bool },
     /// `:e[!] path` — open a file; `force` discards unsaved changes.
     Edit { path: PathBuf, force: bool },
+    /// `:touch path` — create an empty file without overwriting anything.
+    CreateFile(PathBuf),
+    /// `:mkdir path` — create one directory.
+    CreateDirectory(PathBuf),
     /// `:e!` with no path — reload the current file from disk.
     Reload,
     /// `:42` — jump to a line.
