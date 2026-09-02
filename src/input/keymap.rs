@@ -338,6 +338,8 @@ pub fn tree(key: KeyEvent) -> Action {
         KeyCode::PageUp => Action::TreeMove(-10),
         KeyCode::Char('g') | KeyCode::Home => Action::TreeMove(isize::MIN),
         KeyCode::Char('G') | KeyCode::End => Action::TreeMove(isize::MAX),
+        KeyCode::Char('a') => Action::TreeCreate { directory: false },
+        KeyCode::Char('A') => Action::TreeCreate { directory: true },
         _ => Action::None,
     }
 }

@@ -137,6 +137,7 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::ToggleTree => toggle_tree(app),
         Action::TreeMove(delta) => move_tree_selection(app, delta),
         Action::TreeActivate => activate_tree_entry(app),
+        Action::TreeCreate { directory } => begin_tree_creation(app, directory),
 
         Action::SearchStart { forward } => {
             let origin = origin_offset(app);
@@ -346,6 +347,23 @@ fn activate_tree_entry(app: &mut App) {
         }
         Err(error) => app.error(error.to_string()),
     }
+}
+
+/// Open the command line with the selected entry's directory already filled in.
+fn begin_tree_creation(app: &mut App, directory: bool) {
+    let Some(tree) = app.tree.as_ref() else {
+        return;
+    };
+    let parent = tree.creation_directory(app.tree_selected);
+    let command = if directory { "mkdir" } else { "touch" };
+    let separator = std::path::MAIN_SEPARATOR;
+    let mut prefix = parent.as_os_str().to_string_lossy().into_owned();
+    if !prefix.ends_with(separator) {
+        prefix.push(separator);
+    }
+
+    enter_mode(app, Mode::Command);
+    app.command_line = format!("{command} {prefix}");
 }
 
 /// Switch modes, applying the invariants each mode requires.
@@ -773,5 +791,27 @@ mod tests {
         // The caret started on line 0 and cannot still be there.
         assert!(window.cursor().head.line >= window.view.top_line);
         assert!(window.cursor().head.line < window.view.top_line + 10);
+    }
+
+    #[test]
+    fn tree_creation_prefills_the_selected_directory() {
+        let root = std::env::temp_dir().join("termi-dispatch-tree-create");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).expect("create fixture");
+        let mut app = app();
+        app.tree = Some(crate::filesystem::tree::Tree::new(root.clone()));
+        app.tree_visible = true;
+
+        press(&mut app, Action::TreeCreate { directory: false });
+
+        assert_eq!(app.mode, Mode::Command);
+        assert_eq!(
+            app.command_line,
+            format!(
+                "touch {}{}",
+                root.join("src").display(),
+                std::path::MAIN_SEPARATOR
+            )
+        );
     }
 }

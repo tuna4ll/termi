@@ -121,6 +121,8 @@ pub enum Action {
     TreeMove(isize),
     /// Open the selected file, or expand the selected directory.
     TreeActivate,
+    /// Start entering the name of a file or directory beside the selection.
+    TreeCreate { directory: bool },
 
     /// Open the search prompt, searching forwards or backwards.
     SearchStart { forward: bool },
@@ -276,5 +278,19 @@ mod tests {
         let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
         assert_eq!(input.handle(ctrl_s, Mode::Insert), Action::Save);
         assert_eq!(input.handle(plain('a'), Mode::Insert), Action::Insert('a'));
+    }
+
+    #[test]
+    fn tree_creation_has_file_and_directory_shortcuts() {
+        let mut input = Input::default();
+
+        assert_eq!(
+            input.handle(plain('a'), Mode::Tree),
+            Action::TreeCreate { directory: false }
+        );
+        assert_eq!(
+            input.handle(plain('A'), Mode::Tree),
+            Action::TreeCreate { directory: true }
+        );
     }
 }

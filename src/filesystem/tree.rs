@@ -61,6 +61,48 @@ impl Tree {
         &self.entries
     }
 
+    /// Directory in which a new entry should be created for this selection.
+    ///
+    /// A highlighted directory owns the new entry; a highlighted file lends
+    /// its parent. An empty tree falls back to the root itself.
+    #[must_use]
+    pub fn creation_directory(&self, index: usize) -> PathBuf {
+        let Some(entry) = self.entries.get(index) else {
+            return self.root.clone();
+        };
+        if entry.is_dir {
+            entry.path.clone()
+        } else {
+            entry
+                .path
+                .parent()
+                .map_or_else(|| self.root.clone(), Path::to_path_buf)
+        }
+    }
+
+    /// Expand the parents of `path`, refresh, and return its visible row.
+    pub fn reveal(&mut self, path: &Path) -> Option<usize> {
+        if !path.starts_with(&self.root) {
+            self.refresh();
+            return None;
+        }
+
+        let mut parent = path.parent();
+        while let Some(directory) = parent {
+            if !directory.starts_with(&self.root) {
+                break;
+            }
+            self.expanded.insert(directory.to_path_buf());
+            if directory == self.root {
+                break;
+            }
+            parent = directory.parent();
+        }
+
+        self.refresh();
+        self.entries.iter().position(|entry| entry.path == path)
+    }
+
     /// Re-read every expanded directory.
     ///
     /// Called on open and whenever the tree may be stale; unexpanded
@@ -188,5 +230,36 @@ mod tests {
     fn an_out_of_range_index_is_ignored() {
         let mut tree = Tree::new(fixture("range"));
         assert_eq!(tree.activate(99), None);
+    }
+
+    #[test]
+    fn creation_uses_a_directory_or_a_files_parent() {
+        let root = fixture("creation-directory");
+        let tree = Tree::new(root.clone());
+
+        assert_eq!(tree.creation_directory(0), root.join("src"));
+        assert_eq!(tree.creation_directory(1), root);
+    }
+
+    #[test]
+    fn creation_in_an_empty_tree_uses_the_root() {
+        let root = fixture("empty-creation");
+        std::fs::remove_dir_all(root.join("src")).expect("remove fixture directory");
+        std::fs::remove_file(root.join("Cargo.toml")).expect("remove fixture file");
+        let tree = Tree::new(root.clone());
+
+        assert_eq!(tree.creation_directory(0), root);
+    }
+
+    #[test]
+    fn revealing_a_file_opens_its_parent_and_finds_its_row() {
+        let root = fixture("reveal");
+        let mut tree = Tree::new(root.clone());
+        let path = root.join("src/main.rs");
+
+        let index = tree.reveal(&path).expect("file should be visible");
+
+        assert_eq!(tree.entries()[index].path, path);
+        assert!(tree.entries()[0].is_open);
     }
 }

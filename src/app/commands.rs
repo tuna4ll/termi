@@ -27,12 +27,14 @@ MODES     i insert    v visual    V line    : command    / search
 MOVE      h j k l     w b e words     0 ^ $ line     gg G file
 EDIT      x delete    dd line     yy yank    p paste    u undo
 SEARCH    / next      ? previous      n / N repeat
-FILES     Ctrl+B tree     Ctrl+N / Ctrl+P buffers     Ctrl+S save
+FILES     Ctrl+B tree     a file / A directory        Ctrl+S save
+          Ctrl+N / Ctrl+P buffers
 WINDOWS   Ctrl+W then     s / v split     c close     o only
                           h j k l focus   w next      = even
                           + - taller      < > wider
 
-COMMANDS  :w [path]  :q[!]  :wq  :e[!] path  :bn  :bp
+COMMANDS  :w [path]  :q[!]  :wq  :e[!] path  :touch path  :mkdir path
+          :bn  :bp
           :sp  :vs  :clo  :on
           :set <option> [value]     :theme <name>     :<line>
           :%s/pattern/replacement/g";
@@ -92,13 +94,18 @@ fn create_path(app: &mut App, path: PathBuf, directory: bool) {
 
     match result {
         Ok(()) => {
-            if let Some(tree) = app.tree.as_mut() {
-                tree.refresh();
+            if let Some(tree) = app.tree.as_mut()
+                && let Some(index) = tree.reveal(&path)
+            {
+                app.tree_selected = index;
             }
             let kind = if directory { "directory" } else { "file" };
             app.info(format!("created {kind} {}", path.display()));
         }
         Err(error) => app.error(error.to_string()),
+    }
+    if app.tree_visible {
+        app.mode = Mode::Tree;
     }
 }
 
