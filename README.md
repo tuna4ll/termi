@@ -43,8 +43,9 @@ Markdown. Block-comment state is cached per line, so scrolling deep into a file
 does not rescan it.
 
 **Files** — multiple buffers with a tab strip, a lazily expanded file tree
-(`Ctrl+B`), atomic saves, and a watcher that reloads clean buffers when they
-change on disk and warns rather than clobbers when they do not.
+(`Ctrl+B`) that can create files and directories, atomic saves, and a watcher
+that reloads clean buffers when they change on disk and warns rather than
+clobbers when they do not.
 
 **Windows** — split the screen as many ways as you like (`Ctrl+W s` / `Ctrl+W
 v`). A buffer holds the text, the undo history and the highlighting; a window
@@ -68,6 +69,7 @@ Press `:help` inside the editor for the same list.
 | `/` `?` `n` `N` | search forwards, backwards, repeat |
 | `Alt+↑` `Alt+↓` `Esc` | add a cursor above/below, collapse to one |
 | `Ctrl+B` | file tree |
+| `a` `A` (in the tree) | create a file / directory at the selection |
 | `Ctrl+N` `Ctrl+P` | next / previous buffer |
 | `Ctrl+W` `s` `v` | split the window across / down |
 | `Ctrl+W` `h j k l` `w` | move the focus between windows |
@@ -76,9 +78,9 @@ Press `:help` inside the editor for the same list.
 | `Ctrl+S` `Ctrl+Q` | save, quit |
 | `:` | command line |
 
-Commands: `:w [path]` `:q[!]` `:wq` `:e[!] path` `:bn` `:bp` `:<line>`
-`:sp` `:vs` `:clo` `:on` `:set <option> [value]` `:theme <name>`
-`:%s/pattern/replacement/g`
+Commands: `:w [path]` `:q[!]` `:wq` `:e[!] path` `:touch path` `:mkdir path`
+`:bn` `:bp` `:<line>` `:sp` `:vs` `:clo` `:on` `:set <option> [value]`
+`:theme <name>` `:%s/pattern/replacement/g`
 
 ## Configuration
 

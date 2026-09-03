@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Files and directories can be created from the file tree with `a` and `A`, or
+  from the command line with `:touch` and `:mkdir`. Existing paths are never
+  overwritten.
+
 ## [0.1.2] - 2026-08-11
 
 ### Added
