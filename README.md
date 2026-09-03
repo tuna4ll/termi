@@ -10,12 +10,28 @@ read end to end like the second.
 
 ## Install
 
+Linux and macOS:
+
+```sh
+curl -fsSL https://github.com/tuna4ll/termi/releases/latest/download/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://github.com/tuna4ll/termi/releases/latest/download/install.ps1 | iex
+```
+
+The installers select the right prebuilt binary and verify its SHA-256 checksum.
+Linux and macOS install to `~/.local/bin`; Windows installs under Local AppData
+and adds that directory to the user `PATH`.
+
+Alternatively, install from crates.io or download an archive from the
+[releases page][releases]:
+
 ```sh
 cargo install termi
 ```
-
-Or grab a prebuilt binary from the [releases page][releases] — Linux (glibc and
-static musl), macOS (Intel and Apple silicon) and Windows.
 
 Building from source needs Rust 1.88 or newer:
 
