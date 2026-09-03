@@ -7,8 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-09-03
+
 ### Added
 
+- One-line installers now select and verify prebuilt binaries for Linux,
+  macOS and Windows. Release builds publish the installers beside the archives.
 - Files and directories can be created from the file tree with `a` and `A`, or
   from the command line with `:touch` and `:mkdir`. Existing paths are never
   overwritten.
@@ -84,7 +88,8 @@ First release.
   slots they name.
 - **Configuration** — TOML, with every key optional and unknown keys reported.
 
-[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/tuna4ll/termi/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/tuna4ll/termi/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/tuna4ll/termi/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/tuna4ll/termi/releases/tag/v0.1.0
