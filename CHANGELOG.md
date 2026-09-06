@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-09-06
+
 ### Added
 
 - **Selecting with Shift and the arrow keys** — Shift with an arrow, `Home` or
@@ -32,6 +34,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lines. Brackets are not closed in front of a word, and a quote after one is
   left alone so apostrophes still work. `auto_pairs = false`, or
   `:set autopairs off`, turns it off.
+
+### Changed
+
+- Clicking in a window now places the caret as well as moving the focus. The
+  wheel still scrolls whichever window is under the pointer without focusing it.
+- `d`, `y` and the clipboard chords act on a standing selection when there is
+  one, and fall back to the current line when there is not.
+- `i` drops a standing selection rather than keeping it alive unseen; replacing
+  a selection is what typing over it does.
+- A character-wise copy reports characters rather than lines, and says "copied"
+  where it used to say "yanked".
 
 ## [0.1.3] - 2026-09-03
 
@@ -114,7 +127,8 @@ First release.
   slots they name.
 - **Configuration** — TOML, with every key optional and unknown keys reported.
 
-[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/tuna4ll/termi/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/tuna4ll/termi/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/tuna4ll/termi/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/tuna4ll/termi/compare/v0.1.0...v0.1.1
