@@ -48,6 +48,7 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::EnterMode(mode) => enter_mode(app, mode),
         Action::Move(motion) => move_cursors(app, motion, false),
         Action::Extend(motion) => move_cursors(app, motion, true),
+        Action::Select(motion) => select(app, motion),
         Action::Scroll(delta) => {
             let focus = app.windows.focus();
             app.scroll_window(focus, delta);
@@ -382,7 +383,12 @@ fn enter_mode(app: &mut App, mode: Mode) {
             // the end of a line in insert mode has to come back.
             app.clamp_cursors(false);
         }
-        Mode::Visual | Mode::VisualLine => app.window_mut().anchor_selections(),
+        Mode::Visual | Mode::VisualLine => {
+            // A caret parked past the end of a line by insert mode has to come
+            // back before it anchors a selection out there.
+            app.clamp_cursors(false);
+            app.window_mut().anchor_selections();
+        }
         Mode::Command => app.command_line.clear(),
         Mode::Insert | Mode::Search | Mode::Tree => {}
     }
@@ -395,6 +401,19 @@ fn move_cursors(app: &mut App, motion: Motion, extend: bool) {
     let extend = extend || app.mode.is_visual();
     app.edit().checkpoint();
     app.move_cursors(motion, extend, allow_eol);
+}
+
+/// Move with the selection following, starting one if there is not one yet.
+///
+/// This is what a shifted arrow asks for. Neither gesture is modal, so the
+/// editor enters visual mode on the user's behalf: a selection has to be
+/// visible, and visual mode is the only mode that paints one. The ordinary
+/// operators then apply to it.
+fn select(app: &mut App, motion: Motion) {
+    if !app.mode.is_visual() {
+        enter_mode(app, Mode::Visual);
+    }
+    move_cursors(app, motion, true);
 }
 
 /// Move a whole or half screen.
@@ -526,6 +545,7 @@ mod tests {
     use super::*;
     use crate::config::Config;
     use crate::editor::buffer::Buffer;
+    use crate::editor::cursor::Position;
     use crate::editor::document::Document;
     use crate::editor::window::{Area, Axis, Side};
 
@@ -575,6 +595,51 @@ mod tests {
         app.windows.get_mut(left).area = Area::new(0, 0, 40, 20);
         app.windows.get_mut(right).area = Area::new(41, 0, 40, 20);
         (left, right)
+    }
+
+    #[test]
+    fn a_shifted_arrow_starts_a_selection_and_enters_visual_mode() {
+        let mut app = app();
+        type_text(&mut app, "hello");
+        press(&mut app, Action::Move(Motion::LineStart));
+
+        press(&mut app, Action::Select(Motion::Right));
+        assert_eq!(app.mode, Mode::Visual);
+
+        press(&mut app, Action::Select(Motion::Right));
+        let cursor = app.window().cursor();
+        assert_eq!(cursor.anchor.col, 0, "the anchor stays where it started");
+        assert_eq!(cursor.head.col, 2);
+    }
+
+    #[test]
+    fn a_selection_made_with_shift_can_be_deleted() {
+        let mut app = app();
+        type_text(&mut app, "hello");
+        press(&mut app, Action::Move(Motion::LineStart));
+        for _ in 0..3 {
+            press(&mut app, Action::Select(Motion::Right));
+        }
+        press(&mut app, Action::Delete);
+
+        // Visual mode covers the character under the caret, so three steps
+        // right select four characters — the same span `v l l l` would.
+        assert_eq!(text_of(&app), "o");
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn selecting_out_of_insert_mode_anchors_inside_the_line() {
+        let mut app = app();
+        type_text(&mut app, "ab");
+        // Insert mode leaves the caret one past the last character; the anchor
+        // has to come back onto a real one before the selection starts.
+        press(&mut app, Action::EnterMode(Mode::Insert));
+        press(&mut app, Action::Move(Motion::LineEnd));
+        press(&mut app, Action::Select(Motion::Left));
+
+        assert_eq!(app.mode, Mode::Visual);
+        assert_eq!(app.window().cursor().anchor, Position::new(0, 1));
     }
 
     #[test]

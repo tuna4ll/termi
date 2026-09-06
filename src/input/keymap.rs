@@ -81,6 +81,30 @@ fn motion(key: KeyEvent) -> Option<Motion> {
     })
 }
 
+/// The motion a shifted arrow, Home or End asks for.
+///
+/// Only the keys a modeless editor also selects with are listed. The letter
+/// motions are deliberately left out: `G` and `^` reach us with Shift set too,
+/// and they are commands rather than selections.
+fn shift_motion(key: KeyEvent) -> Option<Motion> {
+    if !key.modifiers.contains(KeyModifiers::SHIFT) {
+        return None;
+    }
+    // Ctrl widens the step to a word, as it does in every modeless editor.
+    let by_word = is_ctrl(key.modifiers);
+    Some(match key.code {
+        KeyCode::Left if by_word => Motion::WordBackward,
+        KeyCode::Right if by_word => Motion::WordForward,
+        KeyCode::Left => Motion::Left,
+        KeyCode::Right => Motion::Right,
+        KeyCode::Up => Motion::Up(1),
+        KeyCode::Down => Motion::Down(1),
+        KeyCode::Home => Motion::LineStart,
+        KeyCode::End => Motion::LineEnd,
+        _ => return None,
+    })
+}
+
 /// Normal mode: keys are commands.
 ///
 /// `pending` is set when a key only makes sense as the first half of a sequence.
@@ -90,6 +114,9 @@ pub fn normal(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
     }
     if let Some(action) = universal(key) {
         return action;
+    }
+    if let Some(motion) = shift_motion(key) {
+        return Action::Select(motion);
     }
     if let Some(motion) = motion(key) {
         return Action::Move(motion);
@@ -244,6 +271,11 @@ pub fn insert(key: KeyEvent) -> Action {
     if let Some(action) = universal(key) {
         return action;
     }
+    // A shifted arrow selects instead of moving, which drops out of insert
+    // mode: the selection has to be visible, and only visual mode paints one.
+    if let Some(motion) = shift_motion(key) {
+        return Action::Select(motion);
+    }
     match key.code {
         KeyCode::Esc => Action::EnterMode(Mode::Normal),
         KeyCode::Enter => Action::InsertNewline,
@@ -281,6 +313,9 @@ pub fn visual(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
     }
     if let Some(action) = universal(key) {
         return action;
+    }
+    if let Some(motion) = shift_motion(key) {
+        return Action::Select(motion);
     }
     if let Some(motion) = motion(key) {
         return Action::Extend(motion);

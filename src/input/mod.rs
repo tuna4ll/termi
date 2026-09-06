@@ -41,6 +41,8 @@ pub enum Action {
     Move(Motion),
     /// Move every cursor, extending the selection.
     Extend(Motion),
+    /// Move every cursor, starting a selection if there is not one yet.
+    Select(Motion),
     /// Scroll without moving the caret; negative is upwards.
     Scroll(isize),
     /// Move a page up or down, sized from the current window.
@@ -278,6 +280,47 @@ mod tests {
         let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
         assert_eq!(input.handle(ctrl_s, Mode::Insert), Action::Save);
         assert_eq!(input.handle(plain('a'), Mode::Insert), Action::Insert('a'));
+    }
+
+    #[test]
+    fn a_shifted_arrow_selects_in_every_editing_mode() {
+        let mut input = Input::default();
+        let shift_right = KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT);
+        for mode in [Mode::Normal, Mode::Insert, Mode::Visual] {
+            assert_eq!(
+                input.handle(shift_right, mode),
+                Action::Select(Motion::Right),
+                "shift+right should select in {}",
+                mode.name()
+            );
+        }
+    }
+
+    #[test]
+    fn ctrl_widens_a_shifted_arrow_to_a_word() {
+        let mut input = Input::default();
+        let key = KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT | KeyModifiers::CONTROL);
+        assert_eq!(
+            input.handle(key, Mode::Normal),
+            Action::Select(Motion::WordBackward)
+        );
+    }
+
+    #[test]
+    fn an_unshifted_arrow_still_only_moves() {
+        let mut input = Input::default();
+        let right = KeyEvent::new(KeyCode::Right, KeyModifiers::NONE);
+        assert_eq!(
+            input.handle(right, Mode::Normal),
+            Action::Move(Motion::Right)
+        );
+    }
+
+    #[test]
+    fn a_shifted_letter_keeps_its_command_meaning() {
+        let mut input = Input::default();
+        let g = KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT);
+        assert_eq!(input.handle(g, Mode::Normal), Action::Move(Motion::DocEnd));
     }
 
     #[test]
