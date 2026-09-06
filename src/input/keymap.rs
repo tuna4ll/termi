@@ -51,6 +51,7 @@ fn universal(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('c') => Action::Yank,
         KeyCode::Char('x') => Action::Cut,
         KeyCode::Char('v') => Action::Paste,
+        KeyCode::Char('a') => Action::SelectAll,
         KeyCode::Char('d') => Action::Page {
             down: true,
             half: true,

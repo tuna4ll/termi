@@ -43,6 +43,8 @@ pub enum Action {
     Extend(Motion),
     /// Move every cursor, starting a selection if there is not one yet.
     Select(Motion),
+    /// Select the whole buffer.
+    SelectAll,
     /// Scroll without moving the caret; negative is upwards.
     Scroll(isize),
     /// Move a page up or down, sized from the current window.

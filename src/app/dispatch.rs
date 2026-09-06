@@ -50,6 +50,7 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::Move(motion) => move_cursors(app, motion, false),
         Action::Extend(motion) => move_cursors(app, motion, true),
         Action::Select(motion) => move_cursors(app, motion, true),
+        Action::SelectAll => select_all(app),
         Action::Scroll(delta) => {
             let focus = app.windows.focus();
             app.scroll_window(focus, delta);
@@ -476,6 +477,24 @@ fn move_cursors(app: &mut App, motion: Motion, extend: bool) {
     app.move_cursors(motion, extend, allow_eol);
 }
 
+/// Select the whole buffer, without leaving the current mode.
+///
+/// The head lands past the final character, where a bar cursor sits, so the
+/// selection covers the last one rather than stopping short of it. Extra
+/// cursors go: "everything" is one span, and leaving three carets behind would
+/// mean the next keystroke edited it in three places.
+fn select_all(app: &mut App) {
+    let document = &app.buffer().document;
+    let start = document.char_to_pos(0);
+    let end = document.char_to_pos(document.len_chars());
+
+    app.edit().checkpoint();
+    app.window_mut().clear_secondary_cursors();
+    let cursor = app.window_mut().cursor_mut();
+    cursor.move_to(start, false);
+    cursor.move_to(end, true);
+}
+
 /// Move a whole or half screen.
 fn page(app: &mut App, down: bool, half: bool) {
     let height = usize::from(app.window().area.height).max(1);
@@ -796,6 +815,55 @@ mod tests {
         let cursor = app.window().cursor();
         assert_eq!(cursor.anchor, Position::new(0, 2), "anchored past the end");
         assert_eq!(cursor.head, Position::new(0, 1));
+    }
+
+    #[test]
+    fn select_all_covers_the_whole_buffer() {
+        let mut app = app();
+        type_text(&mut app, "alpha\nbravo\ncharlie");
+        press(&mut app, Action::Move(Motion::DocStart));
+
+        press(&mut app, Action::SelectAll);
+        assert_eq!(app.mode, Mode::Normal, "selecting all is not a mode change");
+
+        press(&mut app, Action::DeleteBackward);
+        assert_eq!(text_of(&app), "");
+    }
+
+    #[test]
+    fn select_all_reaches_the_very_last_character() {
+        let mut app = app();
+        type_text(&mut app, "abc");
+        press(&mut app, Action::SelectAll);
+        press(&mut app, Action::Yank);
+
+        assert_eq!(app.clipboard.get(), "abc");
+    }
+
+    #[test]
+    fn select_all_collapses_to_a_single_cursor() {
+        let mut app = app();
+        type_text(&mut app, "one\ntwo");
+        press(&mut app, Action::Move(Motion::DocStart));
+        press(&mut app, Action::AddCursor { below: true });
+        assert_eq!(app.window().cursors().len(), 2);
+
+        press(&mut app, Action::SelectAll);
+        assert_eq!(app.window().cursors().len(), 1);
+
+        press(&mut app, Action::DeleteBackward);
+        assert_eq!(text_of(&app), "");
+    }
+
+    #[test]
+    fn select_all_in_insert_mode_can_be_typed_over() {
+        let mut app = app();
+        type_text(&mut app, "throw this away");
+        press(&mut app, Action::EnterMode(Mode::Insert));
+        press(&mut app, Action::SelectAll);
+        press(&mut app, Action::Insert('x'));
+
+        assert_eq!(text_of(&app), "x");
     }
 
     #[test]

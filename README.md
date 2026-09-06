@@ -52,7 +52,8 @@ into sensible steps, and multiple cursors (`Alt+↑` / `Alt+↓`) as a first-cla
 part of the editing core rather than a bolted-on mode.
 
 **Selecting** — `v` and the motions, or the ways a modeless editor does it:
-hold Shift and press an arrow, or click and drag. Those two leave the mode
+hold Shift and press an arrow, click and drag, or `Ctrl+A` for all of it.
+Those leave the mode
 alone — you stay in normal or insert mode, the status bar counts what is
 selected, and Backspace, Delete, `Ctrl+C`, `Ctrl+X`, `Ctrl+V` or simply typing
 act on the selection. A plain motion drops it again.
@@ -99,6 +100,7 @@ Press `:help` inside the editor for the same list.
 | `v` `V` | character-wise / line-wise visual mode |
 | `h j k l` `w b e` `0 ^ $` `gg G` | motions |
 | `Shift+←↑↓→` `Shift+Home/End` | select; `Ctrl+Shift+←→` by word |
+| `Ctrl+A` | select the whole file |
 | click, drag | place the caret, select |
 | `Backspace` `Delete` | remove the selection, or one character |
 | `Ctrl+C` `Ctrl+X` `Ctrl+V` | copy, cut, paste — the selection, or the line |
