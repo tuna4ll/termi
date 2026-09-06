@@ -322,6 +322,10 @@ fn status_bar(app: &App) -> StatusBar<'_> {
         line_count: buffer.document.len_lines(),
         line_ending: buffer.document.line_ending(),
         cursor_count: window.cursors().len(),
+        selected: selection_ranges(app)
+            .iter()
+            .map(|range| range.end - range.start)
+            .sum(),
         theme: &app.theme,
     }
 }

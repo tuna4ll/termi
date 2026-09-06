@@ -37,6 +37,12 @@ pub struct StatusBar<'a> {
     pub line_ending: LineEnding,
     /// Number of active cursors; shown only when greater than one.
     pub cursor_count: usize,
+    /// Characters covered by the selection; shown only when there is one.
+    ///
+    /// The mode badge cannot report a selection made with Shift or the mouse —
+    /// those leave the mode alone — so the count is what tells the user how much
+    /// the next keystroke is about to act on.
+    pub selected: usize,
     /// Colours.
     pub theme: &'a Theme,
 }
@@ -58,6 +64,12 @@ impl Widget for StatusBar<'_> {
         if self.cursor_count > 1 {
             left.push(Span::styled(
                 format!("  {} cursors", self.cursor_count),
+                self.theme.status,
+            ));
+        }
+        if self.selected > 0 {
+            left.push(Span::styled(
+                format!("  {} selected", self.selected),
                 self.theme.status,
             ));
         }
