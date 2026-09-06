@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Selecting with Shift and the arrow keys** — Shift with an arrow, `Home` or
+  `End` starts a selection and extends it, from normal or insert mode;
+  `Ctrl+Shift+←/→` moves by word. The editor enters visual mode as it goes, so
+  the selection is painted and `d`, `y` and `c` apply to it.
+- **Selecting with the mouse** — a click now places the caret on the character
+  under the pointer as well as focusing the window, and dragging selects. A drag
+  that leaves the window keeps selecting along the edge it left by. Tabs, wide
+  glyphs and wrapped lines all map back to the right character.
+- **Automatic bracket and quote closing** — typing `(`, `[`, `{`, `"`, `'` or
+  `` ` `` inserts the closing half and leaves the caret between the two. Typing
+  the closing half steps over it instead of doubling it, backspace between the
+  halves removes both, and Enter between them opens the block out over three
+  lines. Brackets are not closed in front of a word, and a quote after one is
+  left alone so apostrophes still work. `auto_pairs = false`, or
+  `:set autopairs off`, turns it off.
+
 ## [0.1.3] - 2026-09-03
 
 ### Added

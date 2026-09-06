@@ -51,6 +51,16 @@ modes. `hjkl` and word motions, `dd`/`yy`/`p`, undo and redo with typing merged
 into sensible steps, and multiple cursors (`Alt+↑` / `Alt+↓`) as a first-class
 part of the editing core rather than a bolted-on mode.
 
+**Selecting** — `v` and the motions, or the ways a modeless editor does it:
+hold Shift and press an arrow, or click and drag. Both drop you into visual
+mode, so the selection is visible and the ordinary operators apply to it.
+
+**Typing** — indentation carried onto new lines, `}` pulled back to line up
+with its opener, and brackets and quotes closed as you type them. Typing the
+closing half steps over it instead of doubling it, backspace between the halves
+takes both, and Enter between `{` and `}` opens the block out over three
+lines. `:set autopairs off` if you would rather type them yourself.
+
 **Search** — incremental, literal or regex, smart case, with matches highlighted
 as you type and `:%s/a/b/g` for replacement.
 
@@ -81,6 +91,8 @@ Press `:help` inside the editor for the same list.
 | `i` `a` `I` `A` `o` `O` | enter insert mode |
 | `v` `V` | character-wise / line-wise visual mode |
 | `h j k l` `w b e` `0 ^ $` `gg G` | motions |
+| `Shift+←↑↓→` `Shift+Home/End` | select; `Ctrl+Shift+←→` by word |
+| click, drag | place the caret, select |
 | `x` `dd` `yy` `p` `u` `Ctrl+R` | delete, yank, paste, undo, redo |
 | `/` `?` `n` `N` | search forwards, backwards, repeat |
 | `Alt+↑` `Alt+↓` `Esc` | add a cursor above/below, collapse to one |
@@ -157,8 +169,7 @@ code expects of a change.
 
 Syntax highlighting is deliberately regex based for now. The next step is
 tree-sitter behind the same `Highlight` span interface, which the renderer and
-themes already consume — no changes above the `syntax` module. Mouse support is
-also intentionally deferred.
+themes already consume — no changes above the `syntax` module.
 
 ## License
 

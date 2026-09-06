@@ -25,6 +25,8 @@ const HELP: &str = "\
 MODES     i insert    v visual    V line    : command    / search
 
 MOVE      h j k l     w b e words     0 ^ $ line     gg G file
+SELECT    Shift+arrows      Ctrl+Shift+left/right by word
+          click to place the caret, drag to select
 EDIT      x delete    dd line     yy yank    p paste    u undo
 SEARCH    / next      ? previous      n / N repeat
 FILES     Ctrl+B tree     a file / A directory        Ctrl+S save
