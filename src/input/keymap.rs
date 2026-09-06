@@ -242,16 +242,17 @@ fn window(key: KeyEvent) -> Action {
 /// How many lines one notch of the wheel moves.
 const WHEEL_STEP: isize = 3;
 
-/// Mouse events, which are about windows rather than about text.
+/// Mouse events.
 ///
-/// A click moves the focus and the wheel scrolls; neither places the caret.
-/// Pointing at a window is an unambiguous instruction about *which* window,
-/// while pointing at a character is not — a click inside a wrapped line, a tab
-/// or a double-width glyph lands between positions rather than on one.
+/// A click focuses a window and places the caret, dragging selects, and the
+/// wheel scrolls whichever window it is over — focused or not, because looking
+/// somewhere is not the same as typing there. The button is released without a
+/// binding of its own: the selection a drag made is simply left standing.
 pub fn mouse(event: MouseEvent) -> Action {
     let (x, y) = (event.column, event.row);
     match event.kind {
-        MouseEventKind::Down(MouseButton::Left) => Action::FocusAt { x, y },
+        MouseEventKind::Down(MouseButton::Left) => Action::ClickAt { x, y },
+        MouseEventKind::Drag(MouseButton::Left) => Action::DragTo { x, y },
         MouseEventKind::ScrollDown => Action::ScrollAt {
             x,
             y,

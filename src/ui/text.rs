@@ -104,6 +104,21 @@ impl DisplayLine {
             .unwrap_or_else(|| self.width())
     }
 
+    /// Source character at display column `column`.
+    ///
+    /// The inverse of [`DisplayLine::column_of`], and what turns a mouse click
+    /// into a caret position. A column past the end of the line gives the
+    /// position just after the last character, which is where a click in the
+    /// empty space to the right of a line belongs. The trailing half of a wide
+    /// glyph reports the glyph itself, so clicking either of its columns picks
+    /// the same character.
+    #[must_use]
+    pub fn char_at(&self, column: usize) -> usize {
+        self.cells
+            .get(column)
+            .map_or(self.char_columns.len() - 1, |cell| cell.char_index)
+    }
+
     /// Split the line into visual rows no wider than `width`.
     ///
     /// Returns half-open cell ranges. Breaks happen after the last space that
@@ -186,6 +201,31 @@ mod tests {
         let line = DisplayLine::new("abc", 4);
         assert_eq!(line.column_of(3), 3);
         assert_eq!(line.column_of(99), 3);
+    }
+
+    #[test]
+    fn a_column_maps_back_to_the_character_that_drew_it() {
+        let line = DisplayLine::new("ab\tc", 4);
+        assert_eq!(line.char_at(0), 0);
+        // Every column of the tab belongs to the tab.
+        assert_eq!(line.char_at(2), 2);
+        assert_eq!(line.char_at(3), 2);
+        assert_eq!(line.char_at(4), 3);
+    }
+
+    #[test]
+    fn both_columns_of_a_wide_glyph_pick_the_same_character() {
+        let line = DisplayLine::new("a漢b", 4);
+        assert_eq!(line.char_at(1), 1);
+        assert_eq!(line.char_at(2), 1);
+        assert_eq!(line.char_at(3), 2);
+    }
+
+    #[test]
+    fn a_column_past_the_end_lands_after_the_last_character() {
+        let line = DisplayLine::new("abc", 4);
+        assert_eq!(line.char_at(99), 3);
+        assert_eq!(DisplayLine::new("", 4).char_at(5), 0);
     }
 
     #[test]

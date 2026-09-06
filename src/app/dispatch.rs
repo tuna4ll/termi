@@ -23,6 +23,7 @@ use crate::editor::document::indent;
 use crate::editor::selection::Range;
 use crate::editor::window::WindowId;
 use crate::input::Action;
+use crate::ui::widgets::editor_view;
 
 /// Apply one action to the editor.
 ///
@@ -124,11 +125,8 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::CycleWindow => cycle_window(app),
         Action::ResizeWindow { axis, delta } => app.windows.resize(axis, delta),
         Action::EqualiseWindows => app.windows.equalise(),
-        Action::FocusAt { x, y } => {
-            if let Some(id) = app.windows.at(x, y) {
-                focus_window(app, id);
-            }
-        }
+        Action::ClickAt { x, y } => click(app, x, y),
+        Action::DragTo { x, y } => drag(app, x, y),
         Action::ScrollAt { x, y, delta } => {
             if let Some(id) = app.windows.at(x, y) {
                 app.scroll_window(id, delta);
@@ -279,6 +277,56 @@ fn focus_window(app: &mut App, id: WindowId) {
     // the end of a line, both belong to the mode it is being left in.
     enter_mode(app, Mode::Normal);
     app.windows.set_focus(id);
+}
+
+/// Focus the window under the pointer and put the caret where it points.
+fn click(app: &mut App, x: u16, y: u16) {
+    let Some(id) = app.windows.at(x, y) else {
+        return;
+    };
+    if id != app.windows.focus() {
+        focus_window(app, id);
+    } else if app.mode.is_visual() {
+        // A fresh click drops the selection it lands in. Insert mode is left
+        // alone on purpose: clicking elsewhere while typing should move the
+        // caret, not throw the user out of the mode.
+        enter_mode(app, Mode::Normal);
+    }
+    place_caret(app, x, y, false);
+}
+
+/// Extend the selection to wherever the pointer has been dragged.
+fn drag(app: &mut App, x: u16, y: u16) {
+    if !app.mode.is_visual() {
+        enter_mode(app, Mode::Visual);
+    }
+    // A drag that leaves the window keeps selecting along the edge it left by,
+    // rather than stopping dead or jumping into the neighbouring window.
+    let area = app.window().area;
+    let x = x.clamp(area.x, area.right().saturating_sub(1).max(area.x));
+    let y = y.clamp(area.y, area.bottom().saturating_sub(1).max(area.y));
+    place_caret(app, x, y, true);
+}
+
+/// Move the primary caret onto the character drawn at a screen cell.
+fn place_caret(app: &mut App, x: u16, y: u16, extend: bool) {
+    let window = app.window();
+    let position = editor_view::position_at(
+        &app.buffers[window.buffer],
+        window,
+        &app.config,
+        window.area,
+        x,
+        y,
+    );
+    let Some(position) = position else {
+        return;
+    };
+    let position = app.buffer().document.clamp(position, app.mode.is_insert());
+
+    app.edit().checkpoint();
+    app.window_mut().clear_secondary_cursors();
+    app.window_mut().cursor_mut().move_to(position, extend);
 }
 
 /// Move the focus to the next window in screen order, wrapping around.
@@ -578,6 +626,21 @@ mod tests {
         app.buffer().document.text().to_string()
     }
 
+    /// Width of the line-number gutter at the sizes these tests use.
+    const GUTTER: u16 = 5;
+
+    /// Draw one frame so the windows learn their areas, and return the focused
+    /// one's. A click means nothing until the editor has been rendered once:
+    /// only a frame records where each window went.
+    fn clicked_area(app: &mut App) -> Area {
+        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 12))
+            .expect("the test backend always builds");
+        terminal
+            .draw(|frame| crate::ui::draw(frame, app))
+            .expect("drawing into the test backend should not fail");
+        app.window().area
+    }
+
     /// The window that is not the focused one.
     fn other_window(app: &App) -> WindowId {
         app.windows
@@ -733,10 +796,114 @@ mod tests {
         let mut app = app();
         let (left, right) = side_by_side(&mut app);
 
-        press(&mut app, Action::FocusAt { x: 10, y: 4 });
+        press(&mut app, Action::ClickAt { x: 10, y: 4 });
         assert_eq!(app.windows.focus(), left);
-        press(&mut app, Action::FocusAt { x: 60, y: 4 });
+        press(&mut app, Action::ClickAt { x: 60, y: 4 });
         assert_eq!(app.windows.focus(), right);
+    }
+
+    #[test]
+    fn a_click_puts_the_caret_on_the_character_under_it() {
+        let mut app = app();
+        type_text(&mut app, "alpha\nbravo\ncharlie");
+        let area = clicked_area(&mut app);
+
+        press(
+            &mut app,
+            Action::ClickAt {
+                x: area.x + GUTTER + 3,
+                y: area.y + 1,
+            },
+        );
+        assert_eq!(app.window().cursor().head, Position::new(1, 3));
+    }
+
+    #[test]
+    fn a_click_past_the_end_of_a_line_lands_on_its_last_character() {
+        let mut app = app();
+        type_text(&mut app, "ab\nlonger line");
+        let area = clicked_area(&mut app);
+
+        press(
+            &mut app,
+            Action::ClickAt {
+                x: area.x + GUTTER + 30,
+                y: area.y,
+            },
+        );
+        // Normal mode's caret sits *on* a character, so it stops at the last one.
+        assert_eq!(app.window().cursor().head, Position::new(0, 1));
+    }
+
+    #[test]
+    fn dragging_selects_and_the_selection_can_be_operated_on() {
+        let mut app = app();
+        type_text(&mut app, "alpha\nbravo");
+        let area = clicked_area(&mut app);
+
+        press(
+            &mut app,
+            Action::ClickAt {
+                x: area.x + GUTTER,
+                y: area.y,
+            },
+        );
+        press(
+            &mut app,
+            Action::DragTo {
+                x: area.x + GUTTER + 2,
+                y: area.y + 1,
+            },
+        );
+
+        assert_eq!(app.mode, Mode::Visual);
+        let cursor = app.window().cursor();
+        assert_eq!(cursor.anchor, Position::ZERO);
+        assert_eq!(cursor.head, Position::new(1, 2));
+
+        press(&mut app, Action::Delete);
+        assert_eq!(text_of(&app), "vo");
+    }
+
+    #[test]
+    fn a_drag_beyond_the_window_keeps_selecting_along_its_edge() {
+        let mut app = app();
+        type_text(&mut app, "alpha\nbravo");
+        let area = clicked_area(&mut app);
+
+        press(
+            &mut app,
+            Action::ClickAt {
+                x: area.x + GUTTER,
+                y: area.y,
+            },
+        );
+        // Far below and to the right of the window, as a drag off the edge is.
+        press(&mut app, Action::DragTo { x: 500, y: 500 });
+
+        assert_eq!(app.mode, Mode::Visual);
+        assert_eq!(app.window().cursor().head, Position::new(1, 4));
+    }
+
+    #[test]
+    fn a_click_drops_the_selection_it_lands_in() {
+        let mut app = app();
+        type_text(&mut app, "alpha");
+        let area = clicked_area(&mut app);
+
+        press(&mut app, Action::EnterMode(Mode::Visual));
+        press(&mut app, Action::Extend(Motion::LineEnd));
+        press(
+            &mut app,
+            Action::ClickAt {
+                x: area.x + GUTTER + 1,
+                y: area.y,
+            },
+        );
+
+        assert_eq!(app.mode, Mode::Normal);
+        let cursor = app.window().cursor();
+        assert_eq!(cursor.head, cursor.anchor);
     }
 
     #[test]

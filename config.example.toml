@@ -38,7 +38,8 @@ watch_files = true             # reload clean buffers changed on disk
 trim_trailing_whitespace = false
 system_clipboard = true        # false uses an internal register instead
 
-# Let the mouse focus and scroll windows. Capturing the mouse takes
-# drag-to-select away from the terminal; most terminals still offer it under
-# Shift, but set this to false to leave the mouse alone entirely.
+# Let the mouse place the caret, select by dragging, and focus and scroll
+# windows. Capturing the mouse takes drag-to-select away from the terminal
+# itself; most terminals still offer that under Shift, but set this to false to
+# leave the mouse alone entirely.
 mouse = true

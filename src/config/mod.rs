@@ -70,11 +70,13 @@ pub struct Config {
     /// Use the system clipboard for yank and paste. When `false`, an internal
     /// register is used instead.
     pub system_clipboard: bool,
-    /// Let the mouse move the focus between windows and scroll them.
+    /// Let the mouse place the caret, select by dragging, focus windows and
+    /// scroll them.
     ///
-    /// Capturing the mouse takes drag-to-select away from the terminal, so this
-    /// is worth turning off for anyone who selects text that way; most
-    /// terminals still offer it under Shift.
+    /// Capturing the mouse takes drag-to-select away from the *terminal*, and
+    /// with it copying to the X or Wayland primary selection, so this is worth
+    /// turning off for anyone who selects text that way; most terminals still
+    /// offer their own selection under Shift.
     pub mouse: bool,
 }
 

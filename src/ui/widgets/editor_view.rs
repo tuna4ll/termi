@@ -8,7 +8,8 @@
 //! redraw touches every cell every frame and the intermediate allocations are
 //! the one thing that shows up on large files.
 //!
-//! **Public API:** [`EditorView`], [`gutter_width`], [`scroll_into_view`].
+//! **Public API:** [`EditorView`], [`gutter_width`], [`scroll_into_view`],
+//! [`position_at`].
 
 use ratatui::buffer::Buffer as Surface;
 use ratatui::layout::Rect;
@@ -17,8 +18,9 @@ use ratatui::widgets::Widget;
 
 use crate::config::Config;
 use crate::editor::buffer::Buffer;
+use crate::editor::cursor::Position;
 use crate::editor::selection::Range;
-use crate::editor::window::Window;
+use crate::editor::window::{Area, Window};
 use crate::search::{LineMatch, Search};
 use crate::syntax::Highlight;
 use crate::theme::Theme;
@@ -83,6 +85,81 @@ pub fn scroll_into_view(buffer: &Buffer, window: &mut Window, config: &Config, a
         }
         window.view.top_line += 1;
     }
+}
+
+/// The document position under a screen cell, or `None` when the cell is not
+/// inside `area`.
+///
+/// The inverse of [`EditorView::caret_position`], and what lets the mouse place
+/// the caret at all: the layers above work in character indices, and only the
+/// renderer knows how many columns a tab or a wide glyph took. The position is
+/// returned unclamped — whether the caret may rest past the last character is a
+/// question about the mode, which this layer does not know about.
+///
+/// A click in the gutter lands on the leftmost visible character of the line
+/// beside it, and one below the last line lands on the last line.
+#[must_use]
+pub fn position_at(
+    buffer: &Buffer,
+    window: &Window,
+    config: &Config,
+    area: Area,
+    x: u16,
+    y: u16,
+) -> Option<Position> {
+    if !area.contains(x, y) {
+        return None;
+    }
+    let gutter = gutter_width(config, buffer.document.len_lines());
+    let width = usize::from(area.width.saturating_sub(gutter));
+    let column = usize::from(x.saturating_sub(area.x + gutter));
+    let row = usize::from(y - area.y);
+
+    let (line, cell) = if config.word_wrap {
+        wrapped_cell(buffer, window, config, width, row, column)?
+    } else {
+        (window.view.top_line + row, window.view.left_col + column)
+    };
+    let line = line.min(buffer.document.last_line());
+    let display = DisplayLine::new(&buffer.document.line_string(line), config.tab_width);
+    Some(Position::new(line, display.char_at(cell)))
+}
+
+/// Which line, and which cell within it, a screen row addresses when wrapping
+/// is on.
+///
+/// Rows are counted rather than subtracted, because a line is worth as many of
+/// them as it needs. A column past the end of a wrapped chunk stays on that
+/// chunk instead of running on into the one drawn below it.
+fn wrapped_cell(
+    buffer: &Buffer,
+    window: &Window,
+    config: &Config,
+    width: usize,
+    row: usize,
+    column: usize,
+) -> Option<(usize, usize)> {
+    if width == 0 {
+        return None;
+    }
+    let mut remaining = row;
+    let mut line = window.view.top_line;
+
+    while line <= buffer.document.last_line() {
+        let display = DisplayLine::new(&buffer.document.line_string(line), config.tab_width);
+        let chunks = display.wrap(width);
+        if let Some(&(start, end)) = chunks.get(remaining) {
+            // The final chunk runs to the end of the line, where the caret may
+            // legitimately sit past the last character; an earlier one ends at a
+            // character that is drawn on the next row.
+            let last = if end == display.width() { end } else { end - 1 };
+            return Some((line, (start + column).min(last)));
+        }
+        remaining -= chunks.len();
+        line += 1;
+    }
+    // Below the last line: the end of the document is the nearest text there is.
+    Some((buffer.document.last_line(), usize::MAX))
 }
 
 /// One screen row's slice of a document line.

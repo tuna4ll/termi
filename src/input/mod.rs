@@ -104,11 +104,15 @@ pub enum Action {
     ResizeWindow { axis: Axis, delta: i16 },
     /// Give every window an equal share of the screen again.
     EqualiseWindows,
-    /// Aim the keyboard at whichever window covers this cell.
+    /// Aim the keyboard at whichever window covers this cell, and put the caret
+    /// on the character drawn there.
     ///
     /// Carried as coordinates rather than a window id because the input layer
-    /// holds no state: only the application knows where the windows are.
-    FocusAt { x: u16, y: u16 },
+    /// holds no state: only the application knows where the windows are, and
+    /// only the renderer knows which character a cell was drawn from.
+    ClickAt { x: u16, y: u16 },
+    /// Drag the selection out to this cell.
+    DragTo { x: u16, y: u16 },
     /// Scroll the window covering this cell, focused or not.
     ScrollAt { x: u16, y: u16, delta: isize },
 
