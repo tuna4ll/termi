@@ -190,8 +190,8 @@ pub struct EditorView<'a> {
     pub theme: &'a Theme,
     /// Tab width, gutter and highlight settings.
     pub config: &'a Config,
-    /// Span to paint with the selection style, if any.
-    pub selection: Option<Range>,
+    /// Spans to paint with the selection style — one per cursor that has one.
+    pub selections: &'a [Range],
     /// Active search, used to highlight matches on the visible lines only.
     pub search: Option<&'a Search>,
     /// The match the caret is sitting on, painted more strongly than the rest.
@@ -375,7 +375,7 @@ impl EditorView<'_> {
         syntax: &[Highlight],
     ) -> Style {
         let index = line_start + column;
-        if self.selection.is_some_and(|range| range.contains(index)) {
+        if self.selections.iter().any(|range| range.contains(index)) {
             return base.patch(self.theme.selection);
         }
         if self.active_match.is_some_and(|range| range.contains(index)) {

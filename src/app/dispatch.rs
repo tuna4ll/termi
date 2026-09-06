@@ -49,7 +49,7 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::EnterMode(mode) => enter_mode(app, mode),
         Action::Move(motion) => move_cursors(app, motion, false),
         Action::Extend(motion) => move_cursors(app, motion, true),
-        Action::Select(motion) => select(app, motion),
+        Action::Select(motion) => move_cursors(app, motion, true),
         Action::Scroll(delta) => {
             let focus = app.windows.focus();
             app.scroll_window(focus, delta);
@@ -59,17 +59,28 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::Insert(ch) => insert_char(app, ch),
         Action::InsertNewline => {
             let (mut edit, config) = app.edit_and_config();
+            edit.delete_selections();
             edit.insert_newline(config);
         }
         Action::InsertIndent => {
             let (mut edit, config) = app.edit_and_config();
+            edit.delete_selections();
             edit.insert_indent(config);
         }
+        // Backspace and Delete take the selection when there is one, and fall
+        // back to a single character when there is not.
         Action::DeleteBackward => {
             let (mut edit, config) = app.edit_and_config();
-            edit.delete_backward(config);
+            if !edit.delete_selections() {
+                edit.delete_backward(config);
+            }
         }
-        Action::DeleteForward => app.edit().delete_forward(),
+        Action::DeleteForward => {
+            let mut edit = app.edit();
+            if !edit.delete_selections() {
+                edit.delete_forward();
+            }
+        }
         Action::Delete => delete_target(app),
 
         Action::OpenLineBelow => open_line(app, true),
@@ -199,6 +210,9 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
 /// cursor, from the text around it, by the editor layer.
 fn insert_char(app: &mut App, ch: char) {
     let (mut edit, config) = app.edit_and_config();
+    // Typing over a selection replaces it, so the character has to land where
+    // the selection was rather than beside it.
+    edit.delete_selections();
     let head = edit.window.cursor().head;
 
     if config.auto_indent && indent::should_dedent(&edit.buffer.document, head.line, head.col, ch) {
@@ -300,9 +314,6 @@ fn click(app: &mut App, x: u16, y: u16) {
 
 /// Extend the selection to wherever the pointer has been dragged.
 fn drag(app: &mut App, x: u16, y: u16) {
-    if !app.mode.is_visual() {
-        enter_mode(app, Mode::Visual);
-    }
     // A drag that leaves the window keeps selecting along the edge it left by,
     // rather than stopping dead or jumping into the neighbouring window.
     let area = app.window().area;
@@ -325,7 +336,8 @@ fn place_caret(app: &mut App, x: u16, y: u16, extend: bool) {
     let Some(position) = position else {
         return;
     };
-    let position = app.buffer().document.clamp(position, app.mode.is_insert());
+    let allow_eol = app.mode.is_insert() || (extend && !app.mode.is_visual());
+    let position = app.buffer().document.clamp(position, allow_eol);
 
     app.edit().checkpoint();
     app.window_mut().clear_secondary_cursors();
@@ -441,30 +453,27 @@ fn enter_mode(app: &mut App, mode: Mode) {
             app.window_mut().anchor_selections();
         }
         Mode::Command => app.command_line.clear(),
-        Mode::Insert | Mode::Search | Mode::Tree => {}
+        // Typing starts at a point, so `i` after selecting puts the caret where
+        // the selection ended rather than keeping an invisible one alive.
+        Mode::Insert => app.window_mut().collapse_selections(),
+        Mode::Search | Mode::Tree => {}
     }
     app.mode = mode;
 }
 
 /// Move every cursor, extending the selection when asked.
+///
+/// A motion that does not extend collapses the selection onto where it lands,
+/// which is the whole of "click somewhere else and the selection goes away".
 fn move_cursors(app: &mut App, motion: Motion, extend: bool) {
-    let allow_eol = app.mode.is_insert();
     let extend = extend || app.mode.is_visual();
+    // A modeless selection puts its head where a bar cursor would go, so it has
+    // to be able to reach past the last character of a line — otherwise
+    // Shift+End would stop one short of the end. Visual mode's caret always
+    // covers a real character, and insert mode's may always sit past one.
+    let allow_eol = app.mode.is_insert() || (extend && !app.mode.is_visual());
     app.edit().checkpoint();
     app.move_cursors(motion, extend, allow_eol);
-}
-
-/// Move with the selection following, starting one if there is not one yet.
-///
-/// This is what a shifted arrow asks for. Neither gesture is modal, so the
-/// editor enters visual mode on the user's behalf: a selection has to be
-/// visible, and visual mode is the only mode that paints one. The ordinary
-/// operators then apply to it.
-fn select(app: &mut App, motion: Motion) {
-    if !app.mode.is_visual() {
-        enter_mode(app, Mode::Visual);
-    }
-    move_cursors(app, motion, true);
 }
 
 /// Move a whole or half screen.
@@ -479,13 +488,18 @@ fn page(app: &mut App, down: bool, half: bool) {
     move_cursors(app, motion, false);
 }
 
-/// The span an operator applies to: the selection in visual mode, the current
-/// line otherwise.
+/// The span an operator applies to, and whether it is a whole-line one.
+///
+/// A standing selection wins wherever there is one — that is what makes `d`,
+/// `y` and Ctrl+C act on what the user dragged out. With nothing selected the
+/// operator falls back to the current line, the way vi's `dd` and `yy` do.
 fn target_range(app: &App) -> (Range, bool) {
     let document = &app.buffer().document;
     let cursor = app.window().cursor();
     match app.mode {
         Mode::Visual => (Range::of(&cursor, document), false),
+        Mode::VisualLine => (Range::of_lines(&cursor, document), true),
+        _ if cursor.has_selection() => (Range::between(&cursor, document), false),
         _ => (Range::of_lines(&cursor, document), true),
     }
 }
@@ -503,17 +517,25 @@ fn yank(app: &mut App, cut: bool) {
         return;
     }
     let lines = text.lines().count();
+    let characters = text.chars().count();
     app.clipboard.set(text, line_wise);
 
     if cut {
         app.edit().delete_range(range);
     }
     enter_mode(app, Mode::Normal);
-    app.info(format!(
-        "{} {lines} line{}",
-        if cut { "cut" } else { "yanked" },
-        if lines == 1 { "" } else { "s" }
-    ));
+
+    // A line count is the useful measure for a whole-line operation and a
+    // misleading one for three characters out of the middle of a line.
+    let verb = if cut { "cut" } else { "copied" };
+    app.info(if line_wise {
+        format!("{verb} {lines} line{}", if lines == 1 { "" } else { "s" })
+    } else {
+        format!(
+            "{verb} {characters} character{}",
+            if characters == 1 { "" } else { "s" }
+        )
+    });
 }
 
 fn paste(app: &mut App) {
@@ -522,6 +544,9 @@ fn paste(app: &mut App) {
         app.info("clipboard is empty");
         return;
     }
+    // Pasting over a selection replaces it, which is the other half of being
+    // able to select something and type over it.
+    app.edit().delete_selections();
     let line_wise = app.clipboard.is_line_wise();
     app.edit().paste(&text, line_wise);
     enter_mode(app, Mode::Normal);
@@ -664,13 +689,14 @@ mod tests {
     }
 
     #[test]
-    fn a_shifted_arrow_starts_a_selection_and_enters_visual_mode() {
+    fn selecting_with_shift_stays_in_the_mode_it_started_in() {
         let mut app = app();
         type_text(&mut app, "hello");
         press(&mut app, Action::Move(Motion::LineStart));
 
         press(&mut app, Action::Select(Motion::Right));
-        assert_eq!(app.mode, Mode::Visual);
+        assert_eq!(app.mode, Mode::Normal, "selecting is not a mode change");
+        assert!(app.has_selection());
 
         press(&mut app, Action::Select(Motion::Right));
         let cursor = app.window().cursor();
@@ -679,33 +705,193 @@ mod tests {
     }
 
     #[test]
-    fn a_selection_made_with_shift_can_be_deleted() {
+    fn a_shifted_arrow_selects_exactly_one_character() {
+        let mut app = app();
+        type_text(&mut app, "hello");
+        press(&mut app, Action::Move(Motion::LineStart));
+        press(&mut app, Action::Select(Motion::Right));
+        press(&mut app, Action::DeleteBackward);
+
+        assert_eq!(text_of(&app), "ello");
+        assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn backspace_takes_the_whole_selection() {
         let mut app = app();
         type_text(&mut app, "hello");
         press(&mut app, Action::Move(Motion::LineStart));
         for _ in 0..3 {
             press(&mut app, Action::Select(Motion::Right));
         }
-        press(&mut app, Action::Delete);
+        press(&mut app, Action::DeleteBackward);
 
-        // Visual mode covers the character under the caret, so three steps
-        // right select four characters — the same span `v l l l` would.
-        assert_eq!(text_of(&app), "o");
-        assert_eq!(app.mode, Mode::Normal);
+        assert_eq!(text_of(&app), "lo");
+        assert!(!app.has_selection(), "the selection is gone with the text");
     }
 
     #[test]
-    fn selecting_out_of_insert_mode_anchors_inside_the_line() {
+    fn delete_forward_takes_the_selection_before_the_character() {
+        let mut app = app();
+        type_text(&mut app, "hello");
+        press(&mut app, Action::Move(Motion::LineStart));
+        press(&mut app, Action::Select(Motion::Right));
+        press(&mut app, Action::Select(Motion::Right));
+        press(&mut app, Action::DeleteForward);
+
+        assert_eq!(text_of(&app), "llo");
+    }
+
+    #[test]
+    fn a_selection_can_run_to_the_end_of_a_line() {
+        let mut app = app();
+        type_text(&mut app, "hello");
+        press(&mut app, Action::Move(Motion::LineStart));
+        press(&mut app, Action::Select(Motion::LineEnd));
+        press(&mut app, Action::DeleteBackward);
+
+        // The head has to be able to rest past the last character, or Shift+End
+        // would leave the final one behind.
+        assert_eq!(text_of(&app), "");
+    }
+
+    #[test]
+    fn typing_replaces_the_selection() {
+        let mut app = app();
+        type_text(&mut app, "hello");
+        press(&mut app, Action::EnterMode(Mode::Insert));
+        press(&mut app, Action::Move(Motion::LineStart));
+        for _ in 0..4 {
+            press(&mut app, Action::Select(Motion::Right));
+        }
+        press(&mut app, Action::Insert('y'));
+
+        assert_eq!(text_of(&app), "yo");
+        assert_eq!(app.mode, Mode::Insert);
+    }
+
+    #[test]
+    fn entering_insert_mode_drops_the_selection_rather_than_replacing_it() {
+        let mut app = app();
+        type_text(&mut app, "hello");
+        press(&mut app, Action::Move(Motion::LineStart));
+        press(&mut app, Action::Select(Motion::Right));
+        // `i` is the modal key for "insert where the caret is", and it keeps
+        // that meaning: replacing a selection is what typing over it does.
+        press(&mut app, Action::EnterMode(Mode::Insert));
+        press(&mut app, Action::Insert('y'));
+
+        assert_eq!(text_of(&app), "hyello");
+    }
+
+    #[test]
+    fn selecting_in_insert_mode_does_not_leave_it() {
         let mut app = app();
         type_text(&mut app, "ab");
-        // Insert mode leaves the caret one past the last character; the anchor
-        // has to come back onto a real one before the selection starts.
         press(&mut app, Action::EnterMode(Mode::Insert));
         press(&mut app, Action::Move(Motion::LineEnd));
         press(&mut app, Action::Select(Motion::Left));
 
-        assert_eq!(app.mode, Mode::Visual);
-        assert_eq!(app.window().cursor().anchor, Position::new(0, 1));
+        assert_eq!(app.mode, Mode::Insert);
+        let cursor = app.window().cursor();
+        assert_eq!(cursor.anchor, Position::new(0, 2), "anchored past the end");
+        assert_eq!(cursor.head, Position::new(0, 1));
+    }
+
+    #[test]
+    fn a_plain_motion_drops_the_selection() {
+        let mut app = app();
+        type_text(&mut app, "hello");
+        press(&mut app, Action::Move(Motion::LineStart));
+        press(&mut app, Action::Select(Motion::Right));
+        press(&mut app, Action::Move(Motion::Right));
+
+        assert!(!app.has_selection());
+        press(&mut app, Action::DeleteBackward);
+        assert_eq!(text_of(&app), "hllo", "one character, not the selection");
+    }
+
+    #[test]
+    fn copying_a_selection_takes_the_characters_not_the_line() {
+        let mut app = app();
+        type_text(&mut app, "hello world");
+        press(&mut app, Action::Move(Motion::LineStart));
+        for _ in 0..5 {
+            press(&mut app, Action::Select(Motion::Right));
+        }
+        press(&mut app, Action::Yank);
+
+        assert_eq!(app.clipboard.get(), "hello");
+        assert!(!app.clipboard.is_line_wise());
+        assert_eq!(text_of(&app), "hello world", "copying changes nothing");
+    }
+
+    #[test]
+    fn cutting_and_pasting_moves_a_selection() {
+        let mut app = app();
+        type_text(&mut app, "hello world");
+        press(&mut app, Action::Move(Motion::LineStart));
+        for _ in 0..6 {
+            press(&mut app, Action::Select(Motion::Right));
+        }
+        press(&mut app, Action::Cut);
+        assert_eq!(text_of(&app), "world");
+
+        press(&mut app, Action::Move(Motion::LineEnd));
+        press(&mut app, Action::EnterMode(Mode::Insert));
+        press(&mut app, Action::Move(Motion::LineEnd));
+        press(&mut app, Action::Paste);
+        assert_eq!(text_of(&app), "worldhello ");
+    }
+
+    #[test]
+    fn pasting_over_a_selection_replaces_it() {
+        let mut app = app();
+        type_text(&mut app, "one two");
+        app.clipboard.set("three".to_string(), false);
+        press(&mut app, Action::Move(Motion::LineStart));
+        for _ in 0..3 {
+            press(&mut app, Action::Select(Motion::Right));
+        }
+        press(&mut app, Action::Paste);
+
+        assert_eq!(text_of(&app), "three two");
+    }
+
+    #[test]
+    fn with_nothing_selected_a_copy_still_takes_the_line() {
+        let mut app = app();
+        type_text(&mut app, "alpha\nbravo");
+        press(&mut app, Action::Yank);
+
+        assert!(app.clipboard.is_line_wise());
+        assert_eq!(app.clipboard.get(), "bravo");
+    }
+
+    #[test]
+    fn every_cursor_loses_its_own_selection() {
+        let mut app = app();
+        type_text(&mut app, "aaa\nbbb");
+        press(&mut app, Action::Move(Motion::DocStart));
+        press(&mut app, Action::AddCursor { below: true });
+        press(&mut app, Action::Select(Motion::Right));
+        press(&mut app, Action::DeleteBackward);
+
+        assert_eq!(text_of(&app), "aa\nbb");
+        assert_eq!(app.window().cursors().len(), 2, "both cursors survive");
+    }
+
+    #[test]
+    fn visual_mode_still_covers_the_character_under_the_caret() {
+        let mut app = app();
+        type_text(&mut app, "hello");
+        press(&mut app, Action::Move(Motion::LineStart));
+        press(&mut app, Action::EnterMode(Mode::Visual));
+        press(&mut app, Action::Extend(Motion::Right));
+        press(&mut app, Action::Delete);
+
+        // `v l d` deletes two characters, as it always has.
+        assert_eq!(text_of(&app), "llo");
     }
 
     #[test]
@@ -859,13 +1045,13 @@ mod tests {
             },
         );
 
-        assert_eq!(app.mode, Mode::Visual);
+        assert_eq!(app.mode, Mode::Normal, "dragging is not a mode change");
         let cursor = app.window().cursor();
         assert_eq!(cursor.anchor, Position::ZERO);
         assert_eq!(cursor.head, Position::new(1, 2));
 
-        press(&mut app, Action::Delete);
-        assert_eq!(text_of(&app), "vo");
+        press(&mut app, Action::DeleteBackward);
+        assert_eq!(text_of(&app), "avo");
     }
 
     #[test]
@@ -884,8 +1070,8 @@ mod tests {
         // Far below and to the right of the window, as a drag off the edge is.
         press(&mut app, Action::DragTo { x: 500, y: 500 });
 
-        assert_eq!(app.mode, Mode::Visual);
-        assert_eq!(app.window().cursor().head, Position::new(1, 4));
+        assert!(app.has_selection());
+        assert_eq!(app.window().cursor().head, Position::new(1, 5));
     }
 
     #[test]

@@ -21,7 +21,7 @@ use super::mode::Mode;
 use crate::clipboard::Clipboard;
 use crate::config::{self, Config};
 use crate::editor::buffer::{Buffer, BufferId};
-use crate::editor::cursor::{Motion, Position};
+use crate::editor::cursor::{Cursor, Motion, Position};
 use crate::editor::document::Document;
 use crate::editor::edit::Edit;
 use crate::editor::window::{Window, WindowId, Windows};
@@ -272,6 +272,18 @@ impl App {
             (current + count - 1) % count
         };
         self.windows.focused_mut().show(next);
+    }
+
+    /// Whether a modeless selection is standing in the focused window.
+    ///
+    /// "Modeless" is the point: a selection made with Shift or the mouse lives
+    /// in whatever mode the user was already in, so this asks the cursors rather
+    /// than the mode. Visual mode is excluded because its selection is a
+    /// different shape — inclusive of the character under the caret — and every
+    /// caller here means the exclusive one.
+    #[must_use]
+    pub fn has_selection(&self) -> bool {
+        !self.mode.is_visual() && self.window().cursors().iter().any(Cursor::has_selection)
     }
 
     /// Whether any buffer has unsaved changes.

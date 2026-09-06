@@ -232,6 +232,40 @@ impl<'a> Edit<'a> {
         self.window.resort();
     }
 
+    /// Delete the selection at every cursor that has one.
+    ///
+    /// Returns whether anything was removed, which is what lets the caller fall
+    /// back to the plain behaviour of the key that asked: Backspace with no
+    /// selection still deletes one character.
+    ///
+    /// This is the per-cursor sibling of [`Edit::delete_range`]: it keeps every
+    /// cursor, because typing over three selections at three cursors has to
+    /// leave three carets behind.
+    pub fn delete_selections(&mut self) -> bool {
+        let mut removed_any = false;
+        for index in self.window.edit_order() {
+            let cursor = self.window.cursors()[index];
+            if !cursor.has_selection() {
+                continue;
+            }
+            let range = Range::between(&cursor, &self.buffer.document);
+            let before = cursor.head;
+
+            let removed = self.buffer.document.remove(range.start, range.end);
+            let after = self.buffer.document.char_to_pos(range.start);
+            self.buffer
+                .history
+                .record(Change::deletion(range.start, removed), before, after);
+            self.window.cursors_mut()[index].move_to(after, false);
+            removed_any = true;
+        }
+        if removed_any {
+            self.invalidate_from_first_cursor();
+            self.window.resort();
+        }
+        removed_any
+    }
+
     /// Delete a span and collapse the primary cursor onto its start.
     ///
     /// Returns the removed text so callers can put it on the clipboard.

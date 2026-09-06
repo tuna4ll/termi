@@ -46,6 +46,11 @@ fn universal(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('p') => Action::CycleBuffer { forward: false },
         KeyCode::Char('z') => Action::Undo,
         KeyCode::Char('y' | 'r') => Action::Redo,
+        // The chords everyone already has in their fingers. With nothing
+        // selected they fall back to the current line, as they do elsewhere.
+        KeyCode::Char('c') => Action::Yank,
+        KeyCode::Char('x') => Action::Cut,
+        KeyCode::Char('v') => Action::Paste,
         KeyCode::Char('d') => Action::Page {
             down: true,
             half: true,

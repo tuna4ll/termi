@@ -219,6 +219,7 @@ fn prepare(app: &mut App, panes: &Panes) {
 fn draw_windows(frame: &mut Frame, app: &App, panes: &Panes) -> Option<(u16, u16)> {
     let focus = app.windows.focus();
     let mut caret = None;
+    let selections = selection_ranges(app);
 
     for (id, rect) in &panes.windows {
         let focused = *id == focus;
@@ -232,7 +233,7 @@ fn draw_windows(frame: &mut Frame, app: &App, panes: &Panes) -> Option<(u16, u16
             // A selection and the search highlight both belong to the window
             // being typed in; painting them everywhere would suggest the other
             // windows were about to act on them too.
-            selection: if focused { selection_range(app) } else { None },
+            selections: if focused { &selections } else { &[] },
             search: (focused && app.search.is_active()).then_some(&app.search),
             active_match: if focused { active_match(app) } else { None },
         };
@@ -284,14 +285,27 @@ fn active_match(app: &App) -> Option<Range> {
         .find(|range| range.contains(head))
 }
 
-/// The span to paint as selected, which exists only in visual modes.
-fn selection_range(app: &App) -> Option<Range> {
+/// The spans to paint as selected, one per cursor that has a selection.
+///
+/// Visual mode selects the character under each caret as well; every other mode
+/// paints whatever Shift or the mouse has dragged out, and nothing when the
+/// cursors are collapsed.
+fn selection_ranges(app: &App) -> Vec<Range> {
+    use crate::app::mode::Mode;
+
     let document = &app.buffer().document;
-    let cursor = app.window().cursor();
+    let cursors = app.window().cursors();
     match app.mode {
-        crate::app::mode::Mode::Visual => Some(Range::of(&cursor, document)),
-        crate::app::mode::Mode::VisualLine => Some(Range::of_lines(&cursor, document)),
-        _ => None,
+        Mode::Visual => cursors.iter().map(|c| Range::of(c, document)).collect(),
+        Mode::VisualLine => cursors
+            .iter()
+            .map(|c| Range::of_lines(c, document))
+            .collect(),
+        _ => cursors
+            .iter()
+            .filter(|cursor| cursor.has_selection())
+            .map(|c| Range::between(c, document))
+            .collect(),
     }
 }
 

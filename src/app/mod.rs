@@ -47,7 +47,9 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
             watch_open_files(app, watcher);
             handle_external_changes(app, watcher.drain());
         }
-        tui.set_cursor_shape(app.mode.uses_bar_cursor())?;
+        // A modeless selection has its head *between* characters, the way a bar
+        // cursor does, so the shape follows the selection as well as the mode.
+        tui.set_cursor_shape(app.mode.uses_bar_cursor() || app.has_selection())?;
         tui.draw(|frame| ui::draw(frame, app))?;
 
         if !event::poll(POLL_INTERVAL)? {

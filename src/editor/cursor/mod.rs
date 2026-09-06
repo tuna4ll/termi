@@ -69,6 +69,12 @@ impl Cursor {
         }
     }
 
+    /// Whether this cursor is dragging a selection behind it.
+    #[must_use]
+    pub fn has_selection(&self) -> bool {
+        self.head != self.anchor
+    }
+
     /// Drop the selection, leaving the caret where it is.
     pub fn collapse(&mut self) {
         self.anchor = self.head;
