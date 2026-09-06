@@ -19,6 +19,7 @@ theme = "dark"
 tab_width = 4
 expand_tabs = true       # insert spaces rather than a tab character
 auto_indent = true       # carry indentation onto new lines, dedent on `}`
+auto_pairs = true        # close brackets and quotes as they are typed
 
 # Gutter.
 line_numbers = true

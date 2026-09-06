@@ -198,6 +198,7 @@ fn set_option(app: &mut App, key: &str, value: &str) {
         }
         "wrap" | "word_wrap" => app.config.word_wrap = boolean(),
         "autoindent" | "ai" | "auto_indent" => app.config.auto_indent = boolean(),
+        "autopairs" | "ap" | "auto_pairs" => app.config.auto_pairs = boolean(),
         "expandtab" | "et" | "expand_tabs" => app.config.expand_tabs = boolean(),
         "cursorline" | "cul" | "highlight_current_line" => {
             app.config.highlight_current_line = boolean();

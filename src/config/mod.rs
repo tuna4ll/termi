@@ -53,6 +53,8 @@ pub struct Config {
     pub relative_line_numbers: bool,
     /// Copy the previous line's indentation onto new lines.
     pub auto_indent: bool,
+    /// Close brackets and quotes as they are typed.
+    pub auto_pairs: bool,
     /// Wrap long lines instead of scrolling horizontally.
     pub word_wrap: bool,
     /// Highlight the line the cursor is on.
@@ -89,6 +91,7 @@ impl Default for Config {
             line_numbers: true,
             relative_line_numbers: false,
             auto_indent: true,
+            auto_pairs: true,
             word_wrap: false,
             highlight_current_line: true,
             scrolloff: 3,

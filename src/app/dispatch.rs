@@ -194,6 +194,9 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
 /// Typing `}` on an otherwise blank, indented line pulls the line back one level
 /// so the bracket lines up with its opener — the one piece of "smart" behaviour
 /// that a per-line editor can get right without a parser.
+///
+/// Whether the character also brings a closing half with it is decided per
+/// cursor, from the text around it, by the editor layer.
 fn insert_char(app: &mut App, ch: char) {
     let (mut edit, config) = app.edit_and_config();
     let head = edit.window.cursor().head;
@@ -201,7 +204,7 @@ fn insert_char(app: &mut App, ch: char) {
     if config.auto_indent && indent::should_dedent(&edit.buffer.document, head.line, head.col, ch) {
         edit.delete_backward(config);
     }
-    edit.insert_text(&ch.to_string());
+    edit.insert_char(ch, config);
 }
 
 /// Upper bound on how many matches `:search` will count.

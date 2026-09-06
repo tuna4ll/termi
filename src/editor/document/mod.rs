@@ -11,9 +11,11 @@
 //! at the edges means every offset in the editor is a plain character index
 //! with no invisible `\r` to account for.
 //!
-//! **Public API:** [`Document`], [`LineEnding`], and the [`indent`] helpers.
+//! **Public API:** [`Document`], [`LineEnding`], and the [`indent`] and
+//! [`pairs`] helpers.
 
 pub mod indent;
+pub mod pairs;
 
 use std::path::{Path, PathBuf};
 

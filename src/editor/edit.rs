@@ -23,6 +23,7 @@ use crate::config::Config;
 use crate::editor::buffer::Buffer;
 use crate::editor::cursor::Position;
 use crate::editor::document::indent;
+use crate::editor::document::pairs::{self, Insertion};
 use crate::editor::selection::Range;
 use crate::editor::window::Window;
 use crate::undo::Change;
@@ -52,27 +53,77 @@ impl<'a> Edit<'a> {
         if text.is_empty() {
             return;
         }
-        let length = text.chars().count();
         for index in self.window.edit_order() {
-            let before = self.window.cursors()[index].head;
-            let at = self.buffer.document.pos_to_char(before);
-
-            self.buffer.document.insert(at, text);
-            let after = self.buffer.document.char_to_pos(at + length);
-            self.buffer
-                .history
-                .record(Change::insertion(at, text), before, after);
-            self.window.cursors_mut()[index].move_to(after, false);
+            self.insert_at(index, text, 0);
         }
         self.invalidate_from_first_cursor();
         self.window.resort();
     }
 
+    /// Insert one typed character at every cursor, closing a bracket or a quote
+    /// when this is a place one should be closed.
+    ///
+    /// The decision is taken per cursor rather than once: two cursors are rarely
+    /// in the same surroundings, and typing `(` should close at the one at the
+    /// end of a line without doing so at the one in the middle of a word.
+    pub fn insert_char(&mut self, ch: char, config: &Config) {
+        if !config.auto_pairs {
+            self.insert_text(&ch.to_string());
+            return;
+        }
+        let mut text = String::with_capacity(8);
+        for index in self.window.edit_order() {
+            let before = self.window.cursors()[index].head;
+            match pairs::resolve(&self.buffer.document, before, ch) {
+                Insertion::Plain => {
+                    text.clear();
+                    text.push(ch);
+                    self.insert_at(index, &text, 0);
+                }
+                Insertion::Pair(close) => {
+                    text.clear();
+                    text.push(ch);
+                    text.push(close);
+                    self.insert_at(index, &text, 1);
+                }
+                // Nothing is inserted, so nothing needs recording: stepping over
+                // a bracket is a movement, and undo should not stop on it.
+                Insertion::Skip => {
+                    let after = Position::new(before.line, before.col + 1);
+                    self.window.cursors_mut()[index].move_to(after, false);
+                }
+            }
+        }
+        self.invalidate_from_first_cursor();
+        self.window.resort();
+    }
+
+    /// Insert `text` at one cursor, leaving the caret `back` characters short of
+    /// the end of it.
+    ///
+    /// `back` is what an auto-closed pair needs: the caret belongs between the
+    /// two halves, not after both.
+    fn insert_at(&mut self, index: usize, text: &str, back: usize) {
+        let before = self.window.cursors()[index].head;
+        let at = self.buffer.document.pos_to_char(before);
+
+        self.buffer.document.insert(at, text);
+        let landed = at + text.chars().count() - back;
+        let after = self.buffer.document.char_to_pos(landed);
+        self.buffer
+            .history
+            .record(Change::insertion(at, text), before, after);
+        self.window.cursors_mut()[index].move_to(after, false);
+    }
+
     /// Break the line at every cursor, carrying the indentation over.
+    ///
+    /// Pressing Enter between the halves of a pair opens the block out over
+    /// three lines, leaving the caret on the blank one in the middle — the
+    /// shape everybody wants after typing `{`.
     pub fn insert_newline(&mut self, config: &Config) {
         for index in self.window.edit_order() {
             let before = self.window.cursors()[index].head;
-            let at = self.buffer.document.pos_to_char(before);
 
             let mut text = String::from("\n");
             if config.auto_indent {
@@ -84,13 +135,19 @@ impl<'a> Edit<'a> {
                     config.expand_tabs,
                 ));
             }
+            let mut back = 0;
+            if config.auto_pairs && pairs::surrounds(&self.buffer.document, before) {
+                // The closing half lines up with the line that opened it, not
+                // with the indented line the caret is left on.
+                let trailer = format!(
+                    "\n{}",
+                    indent::indent_of(&self.buffer.document, before.line)
+                );
+                back = trailer.chars().count();
+                text.push_str(&trailer);
+            }
 
-            self.buffer.document.insert(at, &text);
-            let after = self.buffer.document.char_to_pos(at + text.chars().count());
-            self.buffer
-                .history
-                .record(Change::insertion(at, text.as_str()), before, after);
-            self.window.cursors_mut()[index].move_to(after, false);
+            self.insert_at(index, &text, back);
         }
         self.invalidate_from_first_cursor();
         self.window.resort();
@@ -135,8 +192,16 @@ impl<'a> Edit<'a> {
                 continue;
             }
             let start = at - self.backspace_width(before, config);
+            // Backspacing between the halves of a pair takes both, so a bracket
+            // typed by mistake goes away in one keystroke instead of leaving its
+            // closing half stranded.
+            let end = if config.auto_pairs && pairs::surrounds(&self.buffer.document, before) {
+                at + 1
+            } else {
+                at
+            };
 
-            let removed = self.buffer.document.remove(start, at);
+            let removed = self.buffer.document.remove(start, end);
             let after = self.buffer.document.char_to_pos(start);
             self.buffer
                 .history
@@ -477,6 +542,110 @@ mod tests {
         fixture.caret_to(0, 1);
         fixture.edit().paste("b", false);
         assert_eq!(fixture.text(), "abc");
+    }
+
+    /// Type `text` one character at a time, the way the keyboard delivers it.
+    fn type_chars(fixture: &mut Fixture, text: &str) {
+        for ch in text.chars() {
+            fixture.edit().insert_char(ch, &config());
+        }
+    }
+
+    #[test]
+    fn an_opening_bracket_brings_its_closing_half() {
+        let mut fixture = Fixture::new("");
+        type_chars(&mut fixture, "(");
+        assert_eq!(fixture.text(), "()");
+        assert_eq!(fixture.head(), Position::new(0, 1), "caret goes between");
+    }
+
+    #[test]
+    fn typing_through_a_pair_does_not_double_the_bracket() {
+        let mut fixture = Fixture::new("");
+        type_chars(&mut fixture, "(a)");
+        assert_eq!(fixture.text(), "(a)");
+        assert_eq!(fixture.head(), Position::new(0, 3));
+    }
+
+    #[test]
+    fn a_quote_pairs_and_then_closes_itself() {
+        let mut fixture = Fixture::new("");
+        type_chars(&mut fixture, "\"hi\"");
+        assert_eq!(fixture.text(), "\"hi\"");
+    }
+
+    #[test]
+    fn stepping_over_a_bracket_is_not_its_own_undo_step() {
+        let mut fixture = Fixture::new("");
+        type_chars(&mut fixture, "()");
+        // One insertion happened, so one undo takes the whole pair away.
+        assert!(fixture.edit().undo());
+        assert_eq!(fixture.text(), "");
+    }
+
+    #[test]
+    fn a_bracket_typed_in_front_of_a_word_is_not_closed() {
+        let mut fixture = Fixture::new("word");
+        type_chars(&mut fixture, "(");
+        assert_eq!(fixture.text(), "(word");
+    }
+
+    #[test]
+    fn backspace_between_a_pair_removes_both_halves() {
+        let mut fixture = Fixture::new("");
+        type_chars(&mut fixture, "{");
+        fixture.edit().delete_backward(&config());
+        assert_eq!(fixture.text(), "");
+        assert_eq!(fixture.head(), Position::ZERO);
+    }
+
+    #[test]
+    fn backspace_beside_an_unmatched_bracket_removes_only_it() {
+        let mut fixture = Fixture::new("(]");
+        fixture.caret_to(0, 1);
+        fixture.edit().delete_backward(&config());
+        assert_eq!(fixture.text(), "]");
+    }
+
+    #[test]
+    fn enter_between_a_pair_opens_the_block_out() {
+        let mut fixture = Fixture::new("fn main() ");
+        fixture.caret_to(0, 10);
+        type_chars(&mut fixture, "{");
+        fixture.edit().insert_newline(&config());
+
+        assert_eq!(fixture.text(), "fn main() {\n    \n}");
+        assert_eq!(fixture.head(), Position::new(1, 4));
+    }
+
+    #[test]
+    fn an_opened_block_keeps_the_indentation_of_the_line_that_opened_it() {
+        let mut fixture = Fixture::new("    if x {}");
+        fixture.caret_to(0, 10);
+        fixture.edit().insert_newline(&config());
+
+        assert_eq!(fixture.text(), "    if x {\n        \n    }");
+        assert_eq!(fixture.head(), Position::new(1, 8));
+    }
+
+    #[test]
+    fn pairs_can_be_switched_off() {
+        let plain = Config {
+            auto_pairs: false,
+            ..config()
+        };
+        let mut fixture = Fixture::new("");
+        fixture.edit().insert_char('(', &plain);
+        assert_eq!(fixture.text(), "(");
+    }
+
+    #[test]
+    fn every_cursor_decides_for_itself_whether_to_close() {
+        // One cursor at the end of a line, one in front of a word.
+        let mut fixture = Fixture::new("\nword");
+        fixture.window.add_cursor(Cursor::at(Position::new(1, 0)));
+        fixture.edit().insert_char('(', &config());
+        assert_eq!(fixture.text(), "()\n(word");
     }
 
     #[test]
