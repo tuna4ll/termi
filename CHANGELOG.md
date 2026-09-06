@@ -10,13 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Selecting with Shift and the arrow keys** — Shift with an arrow, `Home` or
-  `End` starts a selection and extends it, from normal or insert mode;
-  `Ctrl+Shift+←/→` moves by word. The editor enters visual mode as it goes, so
-  the selection is painted and `d`, `y` and `c` apply to it.
+  `End` starts a selection and extends it; `Ctrl+Shift+←/→` moves by word. The
+  mode does not change: the selection lives in normal or insert mode, is painted
+  there, and a plain motion drops it. Backspace and Delete remove it, typing
+  replaces it, and pasting over it swaps it out.
 - **Selecting with the mouse** — a click now places the caret on the character
   under the pointer as well as focusing the window, and dragging selects. A drag
   that leaves the window keeps selecting along the edge it left by. Tabs, wide
   glyphs and wrapped lines all map back to the right character.
+- `Ctrl+C`, `Ctrl+X` and `Ctrl+V` copy, cut and paste. With a selection they act
+  on it; with none they fall back to the current line, as `yy` and `dd` do.
+- The status bar counts the selected characters, and the caret is drawn as a bar
+  while a selection stands — the mode badge cannot report either, because these
+  selections are not a mode.
 - **Automatic bracket and quote closing** — typing `(`, `[`, `{`, `"`, `'` or
   `` ` `` inserts the closing half and leaves the caret between the two. Typing
   the closing half steps over it instead of doubling it, backspace between the

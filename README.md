@@ -52,8 +52,15 @@ into sensible steps, and multiple cursors (`Alt+↑` / `Alt+↓`) as a first-cla
 part of the editing core rather than a bolted-on mode.
 
 **Selecting** — `v` and the motions, or the ways a modeless editor does it:
-hold Shift and press an arrow, or click and drag. Both drop you into visual
-mode, so the selection is visible and the ordinary operators apply to it.
+hold Shift and press an arrow, or click and drag. Those two leave the mode
+alone — you stay in normal or insert mode, the status bar counts what is
+selected, and Backspace, Delete, `Ctrl+C`, `Ctrl+X`, `Ctrl+V` or simply typing
+act on the selection. A plain motion drops it again.
+
+The two conventions differ where they have to: a selection dragged out with
+Shift or the mouse is exclusive, so one press covers one character, while
+visual mode stays inclusive of the character under the caret. Each behaves the
+way the people who reach for it expect.
 
 **Typing** — indentation carried onto new lines, `}` pulled back to line up
 with its opener, and brackets and quotes closed as you type them. Typing the
@@ -93,6 +100,8 @@ Press `:help` inside the editor for the same list.
 | `h j k l` `w b e` `0 ^ $` `gg G` | motions |
 | `Shift+←↑↓→` `Shift+Home/End` | select; `Ctrl+Shift+←→` by word |
 | click, drag | place the caret, select |
+| `Backspace` `Delete` | remove the selection, or one character |
+| `Ctrl+C` `Ctrl+X` `Ctrl+V` | copy, cut, paste — the selection, or the line |
 | `x` `dd` `yy` `p` `u` `Ctrl+R` | delete, yank, paste, undo, redo |
 | `/` `?` `n` `N` | search forwards, backwards, repeat |
 | `Alt+↑` `Alt+↓` `Esc` | add a cursor above/below, collapse to one |

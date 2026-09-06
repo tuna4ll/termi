@@ -27,7 +27,9 @@ MODES     i insert    v visual    V line    : command    / search
 MOVE      h j k l     w b e words     0 ^ $ line     gg G file
 SELECT    Shift+arrows      Ctrl+Shift+left/right by word
           click to place the caret, drag to select
+          Backspace or Delete removes it, typing replaces it
 EDIT      x delete    dd line     yy yank    p paste    u undo
+CLIPBOARD Ctrl+C copy    Ctrl+X cut    Ctrl+V paste
 SEARCH    / next      ? previous      n / N repeat
 FILES     Ctrl+B tree     a file / A directory        Ctrl+S save
           Ctrl+N / Ctrl+P buffers
