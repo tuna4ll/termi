@@ -30,6 +30,8 @@ pub enum Action {
     InsertIndent,
     DeleteBackward,
     DeleteForward,
+    DeleteWordBackward,
+    DeleteWordForward,
     Delete,
     OpenLineBelow,
     OpenLineAbove,
@@ -223,6 +225,83 @@ mod tests {
         let mut input = Input::default();
         let g = KeyEvent::new(KeyCode::Char('G'), KeyModifiers::SHIFT);
         assert_eq!(input.handle(g, Mode::Normal), Action::Move(Motion::DocEnd));
+    }
+
+    #[test]
+    fn a_ctrl_arrow_steps_a_whole_word() {
+        let mut input = Input::default();
+        for mode in [Mode::Normal, Mode::Insert] {
+            let left = KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL);
+            let right = KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL);
+            assert_eq!(input.handle(left, mode), Action::Move(Motion::WordBackward));
+            assert_eq!(input.handle(right, mode), Action::Move(Motion::WordForward));
+        }
+    }
+
+    #[test]
+    fn a_ctrl_arrow_extends_the_selection_in_visual_mode() {
+        let mut input = Input::default();
+        let right = KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL);
+        assert_eq!(
+            input.handle(right, Mode::Visual),
+            Action::Extend(Motion::WordForward)
+        );
+    }
+
+    #[test]
+    fn ctrl_home_and_end_reach_the_ends_of_the_file() {
+        let mut input = Input::default();
+        let home = KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL);
+        let end = KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL);
+        assert_eq!(
+            input.handle(home, Mode::Insert),
+            Action::Move(Motion::DocStart)
+        );
+        assert_eq!(
+            input.handle(end, Mode::Insert),
+            Action::Move(Motion::DocEnd)
+        );
+
+        let shifted = KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+        assert_eq!(
+            input.handle(shifted, Mode::Insert),
+            Action::Select(Motion::DocEnd)
+        );
+    }
+
+    #[test]
+    fn ctrl_backspace_and_ctrl_delete_remove_a_word() {
+        let mut input = Input::default();
+        let backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL);
+        let delete = KeyEvent::new(KeyCode::Delete, KeyModifiers::CONTROL);
+        for mode in [Mode::Normal, Mode::Insert, Mode::Visual] {
+            assert_eq!(input.handle(backspace, mode), Action::DeleteWordBackward);
+            assert_eq!(input.handle(delete, mode), Action::DeleteWordForward);
+        }
+    }
+
+    #[test]
+    fn a_terminal_spelling_ctrl_backspace_as_ctrl_h_still_works() {
+        let mut input = Input::default();
+        let ctrl_h = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL);
+        assert_eq!(
+            input.handle(ctrl_h, Mode::Insert),
+            Action::DeleteWordBackward
+        );
+        assert_eq!(
+            input.handle(ctrl_h, Mode::Normal),
+            Action::DeleteWordBackward
+        );
+    }
+
+    #[test]
+    fn a_plain_backspace_still_removes_one_character() {
+        let mut input = Input::default();
+        let backspace = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!(
+            input.handle(backspace, Mode::Insert),
+            Action::DeleteBackward
+        );
     }
 
     #[test]

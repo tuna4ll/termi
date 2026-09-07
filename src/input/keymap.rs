@@ -68,10 +68,10 @@ fn shift_motion(key: KeyEvent) -> Option<Motion> {
     if !key.modifiers.contains(KeyModifiers::SHIFT) {
         return None;
     }
-    let by_word = is_ctrl(key.modifiers);
+    if is_ctrl(key.modifiers) {
+        return ctrl_motion(key);
+    }
     Some(match key.code {
-        KeyCode::Left if by_word => Motion::WordBackward,
-        KeyCode::Right if by_word => Motion::WordForward,
         KeyCode::Left => Motion::Left,
         KeyCode::Right => Motion::Right,
         KeyCode::Up => Motion::Up(1),
@@ -82,15 +82,46 @@ fn shift_motion(key: KeyEvent) -> Option<Motion> {
     })
 }
 
+fn ctrl_motion(key: KeyEvent) -> Option<Motion> {
+    if !is_ctrl(key.modifiers) {
+        return None;
+    }
+    Some(match key.code {
+        KeyCode::Left => Motion::WordBackward,
+        KeyCode::Right => Motion::WordForward,
+        KeyCode::Home => Motion::DocStart,
+        KeyCode::End => Motion::DocEnd,
+        _ => return None,
+    })
+}
+
+/// Terminals that send Ctrl+Backspace as `0x08` reach crossterm as Ctrl+H.
+fn word_delete(key: KeyEvent) -> Option<Action> {
+    if !is_ctrl(key.modifiers) {
+        return None;
+    }
+    Some(match key.code {
+        KeyCode::Backspace | KeyCode::Char('h') => Action::DeleteWordBackward,
+        KeyCode::Delete => Action::DeleteWordForward,
+        _ => return None,
+    })
+}
+
 pub fn normal(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
     if window_prefix(key, pending) {
         return Action::None;
+    }
+    if let Some(action) = word_delete(key) {
+        return action;
     }
     if let Some(action) = universal(key) {
         return action;
     }
     if let Some(motion) = shift_motion(key) {
         return Action::Select(motion);
+    }
+    if let Some(motion) = ctrl_motion(key) {
+        return Action::Move(motion);
     }
     if let Some(motion) = motion(key) {
         return Action::Move(motion);
@@ -224,11 +255,17 @@ pub fn mouse(event: MouseEvent) -> Action {
 }
 
 pub fn insert(key: KeyEvent) -> Action {
+    if let Some(action) = word_delete(key) {
+        return action;
+    }
     if let Some(action) = universal(key) {
         return action;
     }
     if let Some(motion) = shift_motion(key) {
         return Action::Select(motion);
+    }
+    if let Some(motion) = ctrl_motion(key) {
+        return Action::Move(motion);
     }
     match key.code {
         KeyCode::Esc => Action::EnterMode(Mode::Normal),
@@ -261,11 +298,17 @@ pub fn visual(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
     if window_prefix(key, pending) {
         return Action::None;
     }
+    if let Some(action) = word_delete(key) {
+        return action;
+    }
     if let Some(action) = universal(key) {
         return action;
     }
     if let Some(motion) = shift_motion(key) {
         return Action::Select(motion);
+    }
+    if let Some(motion) = ctrl_motion(key) {
+        return Action::Extend(motion);
     }
     if let Some(motion) = motion(key) {
         return Action::Extend(motion);

@@ -59,6 +59,18 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
                 edit.delete_forward();
             }
         }
+        Action::DeleteWordBackward => {
+            let mut edit = app.edit();
+            if !edit.delete_selections() {
+                edit.delete_word_backward();
+            }
+        }
+        Action::DeleteWordForward => {
+            let mut edit = app.edit();
+            if !edit.delete_selections() {
+                edit.delete_word_forward();
+            }
+        }
         Action::Delete => delete_target(app),
 
         Action::OpenLineBelow => open_line(app, true),
