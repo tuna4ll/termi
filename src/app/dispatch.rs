@@ -314,6 +314,10 @@ fn toggle_tree(app: &mut App) {
     if app.tree.is_none() {
         let root = app.tree_root();
         app.tree = Some(crate::filesystem::tree::Tree::new(root));
+    } else {
+        // Opening the panel is the natural way to ask "what is in there now?",
+        // so it re-reads even when the watcher is off or never saw the change.
+        app.refresh_tree();
     }
     enter_mode(app, Mode::Tree);
 }
@@ -1162,6 +1166,49 @@ mod tests {
         assert_eq!(window.view.top_line, 40);
         assert!(window.cursor().head.line >= window.view.top_line);
         assert!(window.cursor().head.line < window.view.top_line + 10);
+    }
+
+    #[test]
+    fn reopening_the_tree_picks_up_files_created_outside_the_editor() {
+        let root = std::env::temp_dir().join("termi-dispatch-tree-external");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create fixture");
+        std::fs::write(root.join("b.txt"), "").expect("create fixture");
+        let mut app = app();
+        app.tree = Some(crate::filesystem::tree::Tree::new(root.clone()));
+        app.tree_visible = true;
+        app.tree_selected = 0;
+
+        // Something else adds a file that sorts above the selected one.
+        std::fs::write(root.join("a.txt"), "").expect("create fixture");
+        press(&mut app, Action::ToggleTree);
+        press(&mut app, Action::ToggleTree);
+
+        let tree = app.tree.as_ref().expect("tree");
+        let names: Vec<&str> = tree.entries().iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["a.txt", "b.txt"]);
+        // The selection followed its file rather than staying on row zero.
+        assert_eq!(
+            tree.path_at(app.tree_selected),
+            Some(root.join("b.txt").as_path())
+        );
+    }
+
+    #[test]
+    fn refreshing_clamps_a_selection_whose_file_is_gone() {
+        let root = std::env::temp_dir().join("termi-dispatch-tree-removed");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create fixture");
+        std::fs::write(root.join("only.txt"), "").expect("create fixture");
+        let mut app = app();
+        app.tree = Some(crate::filesystem::tree::Tree::new(root.clone()));
+        app.tree_selected = 0;
+
+        std::fs::remove_file(root.join("only.txt")).expect("remove fixture");
+        app.refresh_tree();
+
+        assert!(app.tree.as_ref().expect("tree").entries().is_empty());
+        assert_eq!(app.tree_selected, 0);
     }
 
     #[test]
