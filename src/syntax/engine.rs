@@ -344,6 +344,10 @@ mod tests {
                 HighlightKind::Heading => b'H',
                 HighlightKind::Emphasis => b'E',
                 HighlightKind::Link => b'L',
+                HighlightKind::DiffAdded => b'+',
+                HighlightKind::DiffRemoved => b'-',
+                HighlightKind::DiffHunk => b'@',
+                HighlightKind::DiffMeta => b'M',
             };
             for cell in out.iter_mut().take(span.end).skip(span.start) {
                 *cell = letter;
@@ -441,6 +445,41 @@ mod tests {
         assert_eq!(sketch("markdown", "# Title"), "HHHHHHH");
         assert_eq!(sketch("markdown", "see [x](y)"), "....LLLLLL");
         assert_eq!(sketch("markdown", "a **bold** b"), "..EEEEEEEE..");
+    }
+
+    #[test]
+    fn diff_marks_whole_added_and_removed_lines() {
+        assert_eq!(sketch("diff", "+let x = 1;"), "+++++++++++");
+        assert_eq!(sketch("diff", "-let x = 1;"), "-----------");
+        // A context line keeps the default colour.
+        assert_eq!(sketch("diff", " let x = 1;"), "...........");
+    }
+
+    #[test]
+    fn diff_file_headers_are_not_added_or_removed_lines() {
+        assert_eq!(sketch("diff", "--- a/main.rs"), "MMMMMMMMMMMMM");
+        assert_eq!(sketch("diff", "+++ b/main.rs"), "MMMMMMMMMMMMM");
+        assert_eq!(sketch("diff", "-- still removed"), "----------------");
+    }
+
+    #[test]
+    fn diff_hunk_headers_and_metadata() {
+        assert_eq!(
+            sketch("diff", "@@ -1,4 +1,6 @@ fn f"),
+            "@@@@@@@@@@@@@@@@@@@@"
+        );
+        assert_eq!(sketch("diff", "diff --git a/x b/x"), "MMMMMMMMMMMMMMMMMM");
+        assert_eq!(
+            sketch("diff", "index 83db48f..bf269f4 100644"),
+            "MMMMMMMMMMMMMMMMMMMMMMMMMMMMM"
+        );
+    }
+
+    #[test]
+    fn diff_reads_the_older_output_format_too() {
+        assert_eq!(sketch("diff", "3,4c3,4"), "@@@@@@@");
+        assert_eq!(sketch("diff", "< was"), "-----");
+        assert_eq!(sketch("diff", "> now"), "+++++");
     }
 
     #[test]

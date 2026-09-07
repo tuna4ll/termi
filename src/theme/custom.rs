@@ -138,6 +138,10 @@ fn slot_mut<'a>(theme: &'a mut Theme, slot: &str) -> Option<&'a mut Style> {
         "heading" => &mut theme.syntax.heading,
         "emphasis" => &mut theme.syntax.emphasis,
         "link" => &mut theme.syntax.link,
+        "diff_added" => &mut theme.syntax.diff_added,
+        "diff_removed" => &mut theme.syntax.diff_removed,
+        "diff_hunk" => &mut theme.syntax.diff_hunk,
+        "diff_meta" => &mut theme.syntax.diff_meta,
         _ => return None,
     })
 }

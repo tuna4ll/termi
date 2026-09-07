@@ -58,6 +58,14 @@ pub enum HighlightKind {
     Emphasis,
     /// Markdown link or bare URL.
     Link,
+    /// A line a diff adds.
+    DiffAdded,
+    /// A line a diff removes.
+    DiffRemoved,
+    /// A diff hunk header.
+    DiffHunk,
+    /// A diff file header or other metadata line.
+    DiffMeta,
 }
 
 /// A styled span within one line, in character offsets.

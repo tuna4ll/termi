@@ -83,6 +83,14 @@ pub fn dark() -> Theme {
             link: Style::new()
                 .fg(Color::Rgb(0x56, 0xb6, 0xc2))
                 .add_modifier(Modifier::UNDERLINED),
+            diff_added: Style::new().fg(Color::Rgb(0x7f, 0xb9, 0x6e)),
+            diff_removed: Style::new().fg(Color::Rgb(0xe5, 0x5f, 0x5f)),
+            diff_hunk: Style::new()
+                .fg(Color::Rgb(0x56, 0xb6, 0xc2))
+                .add_modifier(Modifier::BOLD),
+            diff_meta: Style::new()
+                .fg(Color::Rgb(0xd7, 0xba, 0x7d))
+                .add_modifier(Modifier::BOLD),
         },
     }
 }
@@ -150,6 +158,14 @@ pub fn light() -> Theme {
             link: Style::new()
                 .fg(Color::Rgb(0x0d, 0x74, 0x89))
                 .add_modifier(Modifier::UNDERLINED),
+            diff_added: Style::new().fg(Color::Rgb(0x2e, 0x7d, 0x32)),
+            diff_removed: Style::new().fg(Color::Rgb(0xc0, 0x2c, 0x2c)),
+            diff_hunk: Style::new()
+                .fg(Color::Rgb(0x0d, 0x74, 0x89))
+                .add_modifier(Modifier::BOLD),
+            diff_meta: Style::new()
+                .fg(Color::Rgb(0x8f, 0x62, 0x00))
+                .add_modifier(Modifier::BOLD),
         },
     }
 }
