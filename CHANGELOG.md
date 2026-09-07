@@ -17,6 +17,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is coloured the same way. The four colours are theme slots like any other:
   `diff_added`, `diff_removed`, `diff_hunk` and `diff_meta`.
 
+### Fixed
+
+- **`:w <path>` now picks the language up.** Writing an unnamed buffer to
+  `hello.c` named the buffer but left it unhighlighted until it was reopened;
+  the highlighter is chosen again whenever a write renames the buffer.
+- **The file tree notices changes made outside the editor.** The watcher now
+  covers the directories the tree has expanded as well as the files that are
+  open, so a file added or removed by another program appears or disappears
+  where it belongs, with the highlighted row following its own file rather than
+  its old position. `Ctrl+B` also re-reads the tree as it opens the panel, which
+  covers the case where the watcher is off or never saw the change.
+
 ## [0.1.5] - 2026-09-07
 
 ### Added
