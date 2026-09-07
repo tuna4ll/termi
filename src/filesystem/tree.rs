@@ -61,6 +61,31 @@ impl Tree {
         &self.entries
     }
 
+    /// Path shown on row `index`, if there is one.
+    #[must_use]
+    pub fn path_at(&self, index: usize) -> Option<&Path> {
+        self.entries.get(index).map(|entry| entry.path.as_path())
+    }
+
+    /// Row showing `path`, if it is currently visible.
+    #[must_use]
+    pub fn index_of(&self, path: &Path) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.path == path)
+    }
+
+    /// Every directory whose contents are on screen, root included.
+    ///
+    /// These are exactly the directories a change on disk could alter the tree
+    /// through, which makes them the set worth watching.
+    pub fn open_directories(&self) -> impl Iterator<Item = &Path> {
+        std::iter::once(self.root.as_path()).chain(
+            self.entries
+                .iter()
+                .filter(|entry| entry.is_open)
+                .map(|entry| entry.path.as_path()),
+        )
+    }
+
     /// Directory in which a new entry should be created for this selection.
     ///
     /// A highlighted directory owns the new entry; a highlighted file lends
@@ -249,6 +274,47 @@ mod tests {
         let tree = Tree::new(root.clone());
 
         assert_eq!(tree.creation_directory(0), root);
+    }
+
+    #[test]
+    fn refreshing_picks_up_a_file_created_outside_the_editor() {
+        let root = fixture("external-create");
+        let mut tree = Tree::new(root.clone());
+        assert_eq!(tree.entries().len(), 2);
+
+        std::fs::write(root.join("notes.md"), "").expect("create file");
+        tree.refresh();
+
+        let names: Vec<&str> = tree.entries().iter().map(|e| e.name.as_str()).collect();
+        assert_eq!(names, vec!["src", "Cargo.toml", "notes.md"]);
+    }
+
+    #[test]
+    fn open_directories_cover_the_root_and_every_expanded_folder() {
+        let root = fixture("open-directories");
+        let mut tree = Tree::new(root.clone());
+        assert_eq!(
+            tree.open_directories().collect::<Vec<_>>(),
+            vec![root.as_path()]
+        );
+
+        tree.activate(0);
+
+        assert_eq!(
+            tree.open_directories().collect::<Vec<_>>(),
+            vec![root.as_path(), root.join("src").as_path()]
+        );
+    }
+
+    #[test]
+    fn a_row_can_be_looked_up_by_index_and_by_path() {
+        let root = fixture("lookups");
+        let tree = Tree::new(root.clone());
+
+        assert_eq!(tree.path_at(0), Some(root.join("src").as_path()));
+        assert_eq!(tree.index_of(&root.join("Cargo.toml")), Some(1));
+        assert_eq!(tree.path_at(99), None);
+        assert_eq!(tree.index_of(&root.join("absent")), None);
     }
 
     #[test]

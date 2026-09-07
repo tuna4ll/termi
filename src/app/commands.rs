@@ -105,12 +105,19 @@ fn write(app: &mut App, path: Option<PathBuf>) {
     if app.config.trim_trailing_whitespace {
         app.edit().trim_trailing_whitespace();
     }
+    let renamed = path.is_some();
     let result = match path {
         Some(path) => app.buffer_mut().document.save_as(path),
         None => app.buffer_mut().document.save(),
     };
     match result {
         Ok(()) => {
+            // `:w hello.c` is how an unnamed buffer gets its name, and the name
+            // is what picks the language — so the highlighter has to be chosen
+            // again rather than left at whatever the old path implied.
+            if renamed {
+                app.buffer_mut().detect_language();
+            }
             let name = app.buffer().document.display_name().to_string();
             let lines = app.buffer().document.len_lines();
             app.info(format!("wrote {name} — {lines} lines"));
@@ -244,4 +251,47 @@ fn substitute(app: &mut App, pattern: &str, replacement: &str, all: bool, whole_
         app.info(format!("replaced {replaced} occurrence(s)"));
     }
     app.mode = Mode::Normal;
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    fn app() -> App {
+        App::with_config(Config {
+            system_clipboard: false,
+            ..Config::default()
+        })
+    }
+
+    fn fixture(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("termi-commands-{name}"));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create fixture");
+        root
+    }
+
+    #[test]
+    fn writing_an_unnamed_buffer_to_a_path_picks_up_its_language() {
+        let path = fixture("write-detects-language").join("hello.c");
+        let mut app = app();
+        assert_eq!(app.buffer().syntax.language_name(), "plain");
+
+        run(&mut app, &format!("w {}", path.display()));
+
+        assert!(!app.status.is_error, "{}", app.status.text);
+        assert_eq!(app.buffer().syntax.language_name(), "c");
+    }
+
+    #[test]
+    fn writing_under_a_new_name_changes_the_language_with_it() {
+        let root = fixture("write-changes-language");
+        let mut app = app();
+
+        run(&mut app, &format!("w {}", root.join("a.c").display()));
+        assert_eq!(app.buffer().syntax.language_name(), "c");
+
+        run(&mut app, &format!("w {}", root.join("a.py").display()));
+        assert_eq!(app.buffer().syntax.language_name(), "python");
+    }
 }

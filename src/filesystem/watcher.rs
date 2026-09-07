@@ -47,25 +47,34 @@ impl Watcher {
         })
     }
 
-    /// Start watching `path`, if it is not already watched.
+    /// Start watching the file at `path`, if it is not already watched.
     ///
     /// The *parent directory* is watched rather than the file itself: many
     /// editors (this one included) save by writing a temporary file and renaming
     /// it over the target, which replaces the inode and would silently detach a
     /// file-level watch.
     pub fn watch(&mut self, path: &Path) {
-        let Some(parent) = path.parent().map(Path::to_path_buf) else {
-            return;
-        };
-        if !self.watched.insert(parent.clone()) {
+        if let Some(parent) = path.parent() {
+            self.watch_directory(parent);
+        }
+    }
+
+    /// Start watching `directory` itself, if it is not already watched.
+    ///
+    /// Non-recursive on purpose: the caller watches the directories it actually
+    /// shows, so the number of watches follows what is on screen rather than the
+    /// size of the project.
+    pub fn watch_directory(&mut self, directory: &Path) {
+        let directory = directory.to_path_buf();
+        if !self.watched.insert(directory.clone()) {
             return;
         }
         if self
             .inner
-            .watch(&parent, RecursiveMode::NonRecursive)
+            .watch(&directory, RecursiveMode::NonRecursive)
             .is_err()
         {
-            self.watched.remove(&parent);
+            self.watched.remove(&directory);
         }
     }
 

@@ -35,7 +35,7 @@ syntax_highlighting = true
 show_tabs = true         # tab strip, shown when more than one file is open
 
 # Behaviour.
-watch_files = true             # reload clean buffers changed on disk
+watch_files = true             # reload clean buffers and refresh the file tree
 trim_trailing_whitespace = false
 system_clipboard = true        # false uses an internal register instead
 

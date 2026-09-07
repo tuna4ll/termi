@@ -86,7 +86,10 @@ headers and file headers apart from both.
 **Files** — multiple buffers with a tab strip, a lazily expanded file tree
 (`Ctrl+B`) that can create files and directories, atomic saves, and a watcher
 that reloads clean buffers when they change on disk and warns rather than
-clobbers when they do not.
+clobbers when they do not. The same watcher keeps the tree current, so a file
+another program adds or removes appears and disappears without a restart, and
+`Ctrl+B` re-reads the directory as it opens the panel. `:w name.c` names an
+unnamed buffer and highlights it as C from that moment on.
 
 **Windows** — split the screen as many ways as you like (`Ctrl+W s` / `Ctrl+W
 v`). A buffer holds the text, the undo history and the highlighting; a window

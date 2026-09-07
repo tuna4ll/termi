@@ -355,6 +355,23 @@ impl App {
         self.popup = Some((title.into(), body.into()));
     }
 
+    /// Re-read the file tree, keeping the highlighted row on the same file.
+    ///
+    /// Rows shift when something appears above them, so following the index
+    /// would move the selection under the user; following the path leaves it
+    /// where they left it, and only a selection that no longer exists falls back
+    /// to the index.
+    pub fn refresh_tree(&mut self) {
+        let Some(tree) = self.tree.as_mut() else {
+            return;
+        };
+        let selected = tree.path_at(self.tree_selected).map(Path::to_path_buf);
+        tree.refresh();
+        let found = selected.and_then(|path| tree.index_of(&path));
+        let last = tree.entries().len().saturating_sub(1);
+        self.tree_selected = found.unwrap_or(self.tree_selected).min(last);
+    }
+
     /// The directory the file tree should show.
     ///
     /// The active file's own directory is the useful default; falling back to

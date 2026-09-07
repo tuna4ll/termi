@@ -45,6 +45,7 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
     while !app.should_quit() {
         if let Some(watcher) = watcher.as_mut() {
             watch_open_files(app, watcher);
+            watch_open_directories(app, watcher);
             handle_external_changes(app, watcher.drain());
         }
         // A modeless selection has its head *between* characters, the way a bar
@@ -91,12 +92,38 @@ fn watch_open_files(app: &App, watcher: &mut Watcher) {
     }
 }
 
+/// Make sure every directory the file tree shows is being watched.
+///
+/// The tree only reads the directories it has expanded, so those are the only
+/// ones a change could alter it through — and watching exactly them keeps the
+/// number of watches proportional to what is on screen rather than to the size
+/// of the project.
+fn watch_open_directories(app: &App, watcher: &mut Watcher) {
+    let Some(tree) = app.tree.as_ref() else {
+        return;
+    };
+    for directory in tree.open_directories() {
+        watcher.watch_directory(directory);
+    }
+}
+
 /// React to files that changed on disk.
 ///
 /// A clean buffer is reloaded silently — that is what the user wants when a
 /// formatter or a branch switch rewrote the file. A modified buffer is never
 /// touched; overwriting unsaved work is unforgivable, so it only gets a warning.
 fn handle_external_changes(app: &mut App, changed: Vec<PathBuf>) {
+    // A file created or deleted by anything else — another editor, a file
+    // manager, `git checkout` — belongs on the tree without waiting for a
+    // restart. Nothing may match a buffer, so this comes before the loop.
+    if app
+        .tree
+        .as_ref()
+        .is_some_and(|tree| changed.iter().any(|path| path.starts_with(tree.root())))
+    {
+        app.refresh_tree();
+    }
+
     for path in changed {
         let Some(index) = app
             .buffers
