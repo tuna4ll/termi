@@ -1,11 +1,10 @@
 //! Text-changing operations, applied at every cursor and recorded for undo.
-//! Cursors are walked back to front so earlier offsets stay valid.
 
 use crate::config::Config;
 use crate::editor::buffer::Buffer;
-use crate::editor::cursor::Position;
-use crate::editor::document::indent;
+use crate::editor::cursor::{Position, word};
 use crate::editor::document::pairs::{self, Insertion};
+use crate::editor::document::{Document, indent};
 use crate::editor::selection::Range;
 use crate::editor::window::Window;
 use crate::undo::Change;
@@ -170,6 +169,41 @@ impl<'a> Edit<'a> {
         }
         self.invalidate_from_first_cursor();
         self.window.resort();
+    }
+
+    pub fn delete_word_backward(&mut self) {
+        self.delete_word(|document, head| {
+            let start = word::delete_start(document, head);
+            (document.pos_to_char(start), document.pos_to_char(head))
+        });
+    }
+
+    pub fn delete_word_forward(&mut self) {
+        self.delete_word(|document, head| {
+            let end = word::delete_end(document, head);
+            (document.pos_to_char(head), document.pos_to_char(end))
+        });
+    }
+
+    /// Each chord is its own undo step: a word is too big a bite to merge.
+    fn delete_word(&mut self, span: impl Fn(&Document, Position) -> (usize, usize)) {
+        for index in self.window.edit_order() {
+            let before = self.window.cursors()[index].head;
+            let (start, end) = span(&self.buffer.document, before);
+            if start >= end {
+                continue;
+            }
+
+            let removed = self.buffer.document.remove(start, end);
+            let after = self.buffer.document.char_to_pos(start);
+            self.buffer
+                .history
+                .record(Change::deletion(start, removed), before, after);
+            self.window.cursors_mut()[index].move_to(after, false);
+        }
+        self.invalidate_from_first_cursor();
+        self.window.resort();
+        self.checkpoint();
     }
 
     pub fn delete_selections(&mut self) -> bool {
@@ -424,6 +458,93 @@ mod tests {
         fixture.caret_to(0, 4);
         fixture.edit().delete_backward(&config());
         assert_eq!(fixture.text(), "wor");
+    }
+
+    #[test]
+    fn ctrl_backspace_takes_a_whole_word() {
+        let mut fixture = Fixture::new("let value = 1;");
+        fixture.caret_to(0, 9);
+        fixture.edit().delete_word_backward();
+        assert_eq!(fixture.text(), "let  = 1;");
+    }
+
+    #[test]
+    fn ctrl_backspace_clears_a_run_of_blanks_in_one_go() {
+        let mut fixture = Fixture::new("word      ");
+        fixture.caret_to(0, 10);
+        fixture.edit().delete_word_backward();
+        assert_eq!(fixture.text(), "word");
+    }
+
+    #[test]
+    fn ctrl_backspace_at_the_start_of_a_line_only_joins_it() {
+        let mut fixture = Fixture::new("first\nsecond");
+        fixture.caret_to(1, 0);
+        fixture.edit().delete_word_backward();
+        assert_eq!(fixture.text(), "firstsecond");
+        assert_eq!(fixture.head(), Position::new(0, 5));
+    }
+
+    #[test]
+    fn ctrl_backspace_eats_the_indent_without_crossing_the_line() {
+        let mut fixture = Fixture::new("if x:\n    body");
+        fixture.caret_to(1, 4);
+        fixture.edit().delete_word_backward();
+        assert_eq!(fixture.text(), "if x:\nbody");
+    }
+
+    #[test]
+    fn ctrl_delete_takes_a_whole_word() {
+        let mut fixture = Fixture::new("let value = 1;");
+        fixture.caret_to(0, 4);
+        fixture.edit().delete_word_forward();
+        assert_eq!(fixture.text(), "let  = 1;");
+    }
+
+    #[test]
+    fn ctrl_delete_clears_a_run_of_blanks_in_one_go() {
+        let mut fixture = Fixture::new("a      b");
+        fixture.caret_to(0, 1);
+        fixture.edit().delete_word_forward();
+        assert_eq!(fixture.text(), "ab");
+    }
+
+    #[test]
+    fn ctrl_delete_at_the_end_of_a_line_pulls_the_next_one_up() {
+        let mut fixture = Fixture::new("first\nsecond");
+        fixture.caret_to(0, 5);
+        fixture.edit().delete_word_forward();
+        assert_eq!(fixture.text(), "firstsecond");
+    }
+
+    #[test]
+    fn a_word_delete_stops_at_the_document_edges() {
+        let mut fixture = Fixture::new("only");
+        fixture.caret_to(0, 0);
+        fixture.edit().delete_word_backward();
+        fixture.caret_to(0, 4);
+        fixture.edit().delete_word_forward();
+        assert_eq!(fixture.text(), "only");
+    }
+
+    #[test]
+    fn every_cursor_loses_its_own_word() {
+        let mut fixture = Fixture::new("one two\nthree four");
+        fixture.caret_to(0, 7);
+        fixture.window.add_cursor(Cursor::at(Position::new(1, 10)));
+        fixture.edit().delete_word_backward();
+        assert_eq!(fixture.text(), "one \nthree ");
+    }
+
+    #[test]
+    fn each_word_delete_is_its_own_undo_step() {
+        let mut fixture = Fixture::new("one two");
+        fixture.caret_to(0, 7);
+        fixture.edit().delete_word_backward();
+        fixture.edit().delete_word_backward();
+        assert_eq!(fixture.text(), "one");
+        assert!(fixture.edit().undo());
+        assert_eq!(fixture.text(), "one ");
     }
 
     #[test]
