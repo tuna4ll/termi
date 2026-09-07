@@ -77,9 +77,11 @@ lines. `:set autopairs off` if you would rather type them yourself.
 **Search** — incremental, literal or regex, smart case, with matches highlighted
 as you type and `:%s/a/b/g` for replacement.
 
-**Syntax highlighting** — regex based, for Rust, C, C++, Zig, Python and
-Markdown. Block-comment state is cached per line, so scrolling deep into a file
-does not rescan it.
+**Syntax highlighting** — regex based, for Rust, C, C++, Zig, Python,
+Markdown, and diffs. Block-comment state is cached per line, so scrolling deep
+into a file does not rescan it. A `.diff`, `.patch` or `.rej` file is coloured
+the way a diff wants to be read: added lines green, removed lines red, hunk
+headers and file headers apart from both.
 
 **Files** — multiple buffers with a tab strip, a lazily expanded file tree
 (`Ctrl+B`) that can create files and directories, atomic saves, and a watcher
