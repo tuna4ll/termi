@@ -100,6 +100,14 @@ pub struct SyntaxStyles {
     pub emphasis: Style,
     /// Markdown links and URLs.
     pub link: Style,
+    /// Lines a diff adds.
+    pub diff_added: Style,
+    /// Lines a diff removes.
+    pub diff_removed: Style,
+    /// Diff hunk headers.
+    pub diff_hunk: Style,
+    /// Diff file headers and other metadata lines.
+    pub diff_meta: Style,
 }
 
 impl SyntaxStyles {
@@ -125,6 +133,10 @@ impl SyntaxStyles {
             HighlightKind::Heading => self.heading,
             HighlightKind::Emphasis => self.emphasis,
             HighlightKind::Link => self.link,
+            HighlightKind::DiffAdded => self.diff_added,
+            HighlightKind::DiffRemoved => self.diff_removed,
+            HighlightKind::DiffHunk => self.diff_hunk,
+            HighlightKind::DiffMeta => self.diff_meta,
         }
     }
 }

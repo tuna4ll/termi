@@ -10,6 +10,7 @@
 
 pub mod c;
 pub mod cpp;
+pub mod diff;
 pub mod markdown;
 pub mod python;
 pub mod rust;
@@ -30,6 +31,7 @@ pub fn all() -> &'static [&'static Language] {
         &zig::ZIG,
         &python::PYTHON,
         &markdown::MARKDOWN,
+        &diff::DIFF,
     ];
     ALL
 }

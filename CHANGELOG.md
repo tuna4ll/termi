@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Diff and patch highlighting** — `.diff`, `.patch` and `.rej` files are
+  read as diffs: added lines green, removed lines red, hunk headers picked out,
+  and file headers, mode and index lines set apart from the text they describe.
+  `--- a/file` and `+++ b/file` are headers rather than a removed and an added
+  line, and the older `diff` output — a `3,4c3,4` range with `<` and `>` lines —
+  is coloured the same way. The four colours are theme slots like any other:
+  `diff_added`, `diff_removed`, `diff_hunk` and `diff_meta`.
+
 ## [0.1.5] - 2026-09-07
 
 ### Added
