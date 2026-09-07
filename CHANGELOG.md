@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-09-08
+
 ### Added
 
 - **Diff and patch highlighting** — `.diff`, `.patch` and `.rej` files are
@@ -165,7 +167,8 @@ First release.
   slots they name.
 - **Configuration** — TOML, with every key optional and unknown keys reported.
 
-[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.1.5...HEAD
+[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.1.6...HEAD
+[0.1.6]: https://github.com/tuna4ll/termi/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/tuna4ll/termi/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/tuna4ll/termi/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/tuna4ll/termi/compare/v0.1.2...v0.1.3
