@@ -249,6 +249,16 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_shift_up_and_down_still_select_a_line() {
+        let mut input = Input::default();
+        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+        assert_eq!(
+            input.handle(up, Mode::Normal),
+            Action::Select(Motion::Up(1))
+        );
+    }
+
+    #[test]
     fn ctrl_home_and_end_reach_the_ends_of_the_file() {
         let mut input = Input::default();
         let home = KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL);

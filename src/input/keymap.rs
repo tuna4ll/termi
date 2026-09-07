@@ -68,8 +68,8 @@ fn shift_motion(key: KeyEvent) -> Option<Motion> {
     if !key.modifiers.contains(KeyModifiers::SHIFT) {
         return None;
     }
-    if is_ctrl(key.modifiers) {
-        return ctrl_motion(key);
+    if let Some(motion) = ctrl_motion(key) {
+        return Some(motion);
     }
     Some(match key.code {
         KeyCode::Left => Motion::Left,
