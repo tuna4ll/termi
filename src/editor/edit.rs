@@ -1,23 +1,5 @@
-//! # Editing
-//!
-//! **Purpose:** the operations that change text.
-//!
-//! **Responsibility:** apply an edit at every cursor, record it in the buffer's
-//! [`History`](crate::undo::History), and leave the cursors somewhere sensible.
-//!
-//! An edit is the one operation that needs both halves of the split between a
-//! file and a view of it: it rewrites the [`Buffer`]'s text and history while
-//! moving the [`Window`]'s cursors along with it. [`Edit`] borrows the two
-//! together for the duration of one operation, which keeps the ownership
-//! obvious — the buffer outlives any particular window onto it, so neither can
-//! hold the other.
-//!
-//! Every operation walks the cursors back to front. Editing the last cursor
-//! first means the offsets of all the earlier ones are still valid when their
-//! turn comes, which removes the whole class of "fix up the other cursors after
-//! the edit" bugs.
-//!
-//! **Public API:** [`Edit`].
+//! Text-changing operations, applied at every cursor and recorded for undo.
+//! Cursors are walked back to front so earlier offsets stay valid.
 
 use crate::config::Config;
 use crate::editor::buffer::Buffer;
@@ -28,27 +10,18 @@ use crate::editor::selection::Range;
 use crate::editor::window::Window;
 use crate::undo::Change;
 
-/// A buffer and the window editing it, borrowed together.
 #[derive(Debug)]
 pub struct Edit<'a> {
-    /// The text being changed, and the history recording the change.
     pub buffer: &'a mut Buffer,
-    /// The cursors the change happens at.
     pub window: &'a mut Window,
 }
 
 impl<'a> Edit<'a> {
-    /// Borrow a buffer and a window as one editable unit.
-    ///
-    /// The caller is responsible for the two matching — `window.buffer` must
-    /// identify `buffer` — because only the application knows the buffer list
-    /// the index refers to.
     #[must_use]
     pub fn new(buffer: &'a mut Buffer, window: &'a mut Window) -> Self {
         Self { buffer, window }
     }
 
-    /// Insert `text` at every cursor.
     pub fn insert_text(&mut self, text: &str) {
         if text.is_empty() {
             return;
@@ -60,12 +33,6 @@ impl<'a> Edit<'a> {
         self.window.resort();
     }
 
-    /// Insert one typed character at every cursor, closing a bracket or a quote
-    /// when this is a place one should be closed.
-    ///
-    /// The decision is taken per cursor rather than once: two cursors are rarely
-    /// in the same surroundings, and typing `(` should close at the one at the
-    /// end of a line without doing so at the one in the middle of a word.
     pub fn insert_char(&mut self, ch: char, config: &Config) {
         if !config.auto_pairs {
             self.insert_text(&ch.to_string());
@@ -86,8 +53,6 @@ impl<'a> Edit<'a> {
                     text.push(close);
                     self.insert_at(index, &text, 1);
                 }
-                // Nothing is inserted, so nothing needs recording: stepping over
-                // a bracket is a movement, and undo should not stop on it.
                 Insertion::Skip => {
                     let after = Position::new(before.line, before.col + 1);
                     self.window.cursors_mut()[index].move_to(after, false);
@@ -98,11 +63,6 @@ impl<'a> Edit<'a> {
         self.window.resort();
     }
 
-    /// Insert `text` at one cursor, leaving the caret `back` characters short of
-    /// the end of it.
-    ///
-    /// `back` is what an auto-closed pair needs: the caret belongs between the
-    /// two halves, not after both.
     fn insert_at(&mut self, index: usize, text: &str, back: usize) {
         let before = self.window.cursors()[index].head;
         let at = self.buffer.document.pos_to_char(before);
@@ -116,11 +76,6 @@ impl<'a> Edit<'a> {
         self.window.cursors_mut()[index].move_to(after, false);
     }
 
-    /// Break the line at every cursor, carrying the indentation over.
-    ///
-    /// Pressing Enter between the halves of a pair opens the block out over
-    /// three lines, leaving the caret on the blank one in the middle — the
-    /// shape everybody wants after typing `{`.
     pub fn insert_newline(&mut self, config: &Config) {
         for index in self.window.edit_order() {
             let before = self.window.cursors()[index].head;
@@ -137,8 +92,6 @@ impl<'a> Edit<'a> {
             }
             let mut back = 0;
             if config.auto_pairs && pairs::surrounds(&self.buffer.document, before) {
-                // The closing half lines up with the line that opened it, not
-                // with the indented line the caret is left on.
                 let trailer = format!(
                     "\n{}",
                     indent::indent_of(&self.buffer.document, before.line)
@@ -153,11 +106,6 @@ impl<'a> Edit<'a> {
         self.window.resort();
     }
 
-    /// Insert one indentation step at every cursor.
-    ///
-    /// With `expand_tabs` the step is only as wide as it needs to be to reach
-    /// the next tab stop, so pressing Tab mid-line lines up instead of always
-    /// jumping a full `tab_width`.
     pub fn insert_indent(&mut self, config: &Config) {
         if !config.expand_tabs {
             self.insert_text("\t");
@@ -180,10 +128,6 @@ impl<'a> Edit<'a> {
         self.window.resort();
     }
 
-    /// Delete the character before every cursor.
-    ///
-    /// Inside leading whitespace this removes a whole indentation step, which is
-    /// what makes backspace feel symmetric with Tab.
     pub fn delete_backward(&mut self, config: &Config) {
         for index in self.window.edit_order() {
             let before = self.window.cursors()[index].head;
@@ -192,9 +136,6 @@ impl<'a> Edit<'a> {
                 continue;
             }
             let start = at - self.backspace_width(before, config);
-            // Backspacing between the halves of a pair takes both, so a bracket
-            // typed by mistake goes away in one keystroke instead of leaving its
-            // closing half stranded.
             let end = if config.auto_pairs && pairs::surrounds(&self.buffer.document, before) {
                 at + 1
             } else {
@@ -212,7 +153,6 @@ impl<'a> Edit<'a> {
         self.window.resort();
     }
 
-    /// Delete the character under every cursor.
     pub fn delete_forward(&mut self) {
         for index in self.window.edit_order() {
             let before = self.window.cursors()[index].head;
@@ -232,15 +172,6 @@ impl<'a> Edit<'a> {
         self.window.resort();
     }
 
-    /// Delete the selection at every cursor that has one.
-    ///
-    /// Returns whether anything was removed, which is what lets the caller fall
-    /// back to the plain behaviour of the key that asked: Backspace with no
-    /// selection still deletes one character.
-    ///
-    /// This is the per-cursor sibling of [`Edit::delete_range`]: it keeps every
-    /// cursor, because typing over three selections at three cursors has to
-    /// leave three carets behind.
     pub fn delete_selections(&mut self) -> bool {
         let mut removed_any = false;
         for index in self.window.edit_order() {
@@ -266,9 +197,6 @@ impl<'a> Edit<'a> {
         removed_any
     }
 
-    /// Delete a span and collapse the primary cursor onto its start.
-    ///
-    /// Returns the removed text so callers can put it on the clipboard.
     pub fn delete_range(&mut self, range: Range) -> String {
         if range.is_empty() {
             return String::new();
@@ -289,12 +217,6 @@ impl<'a> Edit<'a> {
         removed
     }
 
-    /// Insert clipboard content at the primary cursor.
-    ///
-    /// Line-wise content goes on its own line *below* the caret, the way `p`
-    /// behaves in vi; a fragment is spliced in at the caret. Getting this wrong
-    /// is the difference between pasting a function after the current one and
-    /// pasting it into the middle of a line.
     pub fn paste(&mut self, text: &str, line_wise: bool) {
         if text.is_empty() {
             return;
@@ -314,8 +236,6 @@ impl<'a> Edit<'a> {
             }
             (self.buffer.document.line_start(next_line), payload)
         } else {
-            // Nothing follows this line, so the payload has to bring its own
-            // leading newline instead of a trailing one.
             let payload = format!("\n{}", text.trim_end_matches('\n'));
             (self.buffer.document.len_chars(), payload)
         };
@@ -335,10 +255,6 @@ impl<'a> Edit<'a> {
         self.checkpoint();
     }
 
-    /// Strip trailing spaces and tabs from every line.
-    ///
-    /// Returns how many lines changed. Runs on save, back to front so earlier
-    /// offsets stay valid, and as a single undo step so one `u` puts it all back.
     pub fn trim_trailing_whitespace(&mut self) -> usize {
         let before = self.window.cursor().head;
         let mut trimmed = 0;
@@ -368,9 +284,6 @@ impl<'a> Edit<'a> {
         trimmed
     }
 
-    /// Undo one step, moving the caret to where the edit started.
-    ///
-    /// Returns `false` when there is nothing left to undo.
     pub fn undo(&mut self) -> bool {
         let Some(position) = self.buffer.history.undo(&mut self.buffer.document) else {
             return false;
@@ -379,9 +292,6 @@ impl<'a> Edit<'a> {
         true
     }
 
-    /// Redo one step.
-    ///
-    /// Returns `false` when there is nothing to redo.
     pub fn redo(&mut self) -> bool {
         let Some(position) = self.buffer.history.redo(&mut self.buffer.document) else {
             return false;
@@ -390,27 +300,19 @@ impl<'a> Edit<'a> {
         true
     }
 
-    /// End the current undo step, so the next edit starts a new one.
     pub fn checkpoint(&mut self) {
         self.buffer.history.checkpoint();
     }
 
-    /// Invalidate the syntax cache from the topmost cursor downwards.
-    ///
-    /// Cursors are in document order, so the first one is the earliest line any
-    /// of them can have touched.
     fn invalidate_from_first_cursor(&mut self) {
         let line = self.window.cursors()[0].head.line;
         self.buffer.invalidate_syntax_from(line);
     }
 
-    /// How many characters backspace should remove at `position`.
     fn backspace_width(&self, position: Position, config: &Config) -> usize {
         if !config.expand_tabs || position.col == 0 {
             return 1;
         }
-        // Only collapse a full indent step when everything to the left is
-        // spaces; otherwise backspace inside a word would eat several letters.
         let leading_spaces = self
             .buffer
             .document
@@ -425,7 +327,6 @@ impl<'a> Edit<'a> {
         step.min(position.col)
     }
 
-    /// Put a single cursor at `position` after a history operation.
     fn restore_caret(&mut self, position: Position) {
         self.window.clear_secondary_cursors();
         let clamped = self.buffer.document.clamp(position, true);
@@ -440,7 +341,6 @@ mod tests {
     use crate::editor::cursor::Cursor;
     use crate::editor::document::Document;
 
-    /// A buffer and a window on it, the pair every edit needs.
     struct Fixture {
         buffer: Buffer,
         window: Window,
@@ -578,7 +478,6 @@ mod tests {
         assert_eq!(fixture.text(), "abc");
     }
 
-    /// Type `text` one character at a time, the way the keyboard delivers it.
     fn type_chars(fixture: &mut Fixture, text: &str) {
         for ch in text.chars() {
             fixture.edit().insert_char(ch, &config());
@@ -612,7 +511,6 @@ mod tests {
     fn stepping_over_a_bracket_is_not_its_own_undo_step() {
         let mut fixture = Fixture::new("");
         type_chars(&mut fixture, "()");
-        // One insertion happened, so one undo takes the whole pair away.
         assert!(fixture.edit().undo());
         assert_eq!(fixture.text(), "");
     }
@@ -675,7 +573,6 @@ mod tests {
 
     #[test]
     fn every_cursor_decides_for_itself_whether_to_close() {
-        // One cursor at the end of a line, one in front of a word.
         let mut fixture = Fixture::new("\nword");
         fixture.window.add_cursor(Cursor::at(Position::new(1, 0)));
         fixture.edit().insert_char('(', &config());
@@ -704,7 +601,6 @@ mod tests {
         Edit::new(&mut buffer, &mut second).insert_text("<");
 
         assert_eq!(buffer.document.text().to_string(), "<>shared");
-        // Each window moved its own caret and only its own.
         assert_eq!(first.cursor().head, Position::new(0, 1));
         assert_eq!(second.cursor().head, Position::new(0, 1));
     }
@@ -716,8 +612,6 @@ mod tests {
         let mut second = Window::new(0);
 
         Edit::new(&mut buffer, &mut first).insert_text("typed");
-        // The second window undoes an edit it did not make, because the history
-        // belongs to the file rather than to the view of it.
         assert!(Edit::new(&mut buffer, &mut second).undo());
         assert_eq!(buffer.document.text().to_string(), "");
     }

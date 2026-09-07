@@ -1,12 +1,4 @@
-//! # Command execution
-//!
-//! **Purpose:** carry out a parsed `:` command.
-//!
-//! **Responsibility:** the effect half of [`crate::editor::command`]. Every arm
-//! ends by putting a message in the status area, because a command line that
-//! silently does nothing is indistinguishable from one that failed.
-//!
-//! **Public API:** [`run`].
+//! Ex commands: `:w`, `:q`, `:set` and friends, plus the `:help` popup.
 
 use std::path::PathBuf;
 
@@ -17,10 +9,6 @@ use crate::editor::command::{Command, parser};
 use crate::editor::cursor::Motion;
 use crate::theme::Theme;
 
-/// Text of the `:help` popup.
-///
-/// Kept as one literal rather than generated from the keymap: the keymap is
-/// exhaustive and this is the short list worth memorising.
 const HELP: &str = "\
 MODES     i insert    v visual    V line    : command    / search
 
@@ -43,7 +31,6 @@ COMMANDS  :w [path]  :q[!]  :wq  :e[!] path  :touch path  :mkdir path
           :set <option> [value]     :theme <name>     :<line>
           :%s/pattern/replacement/g";
 
-/// Parse and execute a command line, without the leading `:`.
 pub fn run(app: &mut App, line: &str) {
     match parser::parse(line) {
         Ok(command) => execute(app, command),
@@ -88,7 +75,6 @@ fn execute(app: &mut App, command: Command) {
     }
 }
 
-/// Create a filesystem entry and immediately make it visible in an open tree.
 fn create_path(app: &mut App, path: PathBuf, directory: bool) {
     let result = if directory {
         crate::filesystem::create_directory(&path)
@@ -131,10 +117,6 @@ fn write(app: &mut App, path: Option<PathBuf>) {
     }
 }
 
-/// `:q` closes the window, then the buffer, then the editor.
-///
-/// Closing a window is always safe — the buffer stays open behind it — so the
-/// unsaved-changes check only applies once this is the last view of the file.
 fn quit(app: &mut App, force: bool) {
     if app.windows.count() > 1 {
         app.windows.close(app.windows.focus());
@@ -168,7 +150,6 @@ fn edit(app: &mut App, path: PathBuf, force: bool) {
 fn reload(app: &mut App) {
     match app.buffer_mut().document.reload() {
         Ok(()) => {
-            // The file may have shrunk, so no cursor can be trusted afterwards.
             app.window_mut().clear_secondary_cursors();
             app.clamp_cursors(false);
             app.info("reloaded from disk");
@@ -187,10 +168,6 @@ fn set_theme(app: &mut App, name: &str) {
     }
 }
 
-/// Change one setting for the current session.
-///
-/// Names accept the vi spellings as well as the config-file ones, so muscle
-/// memory from either direction works.
 fn set_option(app: &mut App, key: &str, value: &str) {
     let boolean = || matches!(value, "true" | "on" | "yes" | "1");
     let number = |fallback: usize| value.parse::<usize>().unwrap_or(fallback);
@@ -207,8 +184,6 @@ fn set_option(app: &mut App, key: &str, value: &str) {
         "cursorline" | "cul" | "highlight_current_line" => {
             app.config.highlight_current_line = boolean();
         }
-        // `:set syntax` takes either a switch or a language name, which is how
-        // both vi and every editor that copied it behave.
         "syntax" | "syntax_highlighting" => {
             if matches!(
                 value,
@@ -257,13 +232,8 @@ fn substitute(app: &mut App, pattern: &str, replacement: &str, all: bool, whole_
     } = app;
     let replaced = search.replace_in(&mut buffers[index].document, lines, replacement, all);
 
-    // The replacement went straight into the document, so the highlighter is
-    // still holding state it derived from the text that used to be there.
     app.buffer_mut().invalidate_syntax_from(0);
-    // Substitution rewrites whole lines, so the caret may now be past the end.
     app.clamp_cursors(false);
-    // Rewriting lines wholesale cannot be expressed as one coalesced edit, so
-    // close the undo step to keep the next keystroke separate.
     app.edit().checkpoint();
 
     if replaced == 0 {

@@ -1,18 +1,4 @@
-//! # Keymaps
-//!
-//! **Purpose:** the actual key bindings.
-//!
-//! **Responsibility:** one function per mode, each a flat `match` from key to
-//! [`Action`]. A table rather than nested conditionals means the whole binding
-//! set for a mode can be read — and audited for conflicts — in one screen.
-//!
-//! The bindings follow vi where vi is unambiguous, and Helix where vi is
-//! awkward; the editing keys (`Ctrl+S`, `Ctrl+Q`, arrows, Home/End) also work
-//! the way a modeless editor's do, so the editor is usable before the modal
-//! bindings are learned.
-//!
-//! **Public API:** [`normal`], [`insert`], [`visual`], [`command`],
-//! [`pending`].
+//! The key bindings: one flat `match` per mode, vi where vi is unambiguous.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
@@ -21,11 +7,6 @@ use crate::app::mode::Mode;
 use crate::editor::cursor::Motion;
 use crate::editor::window::{Axis, Side};
 
-/// Start the `Ctrl+W` window sequence, if that is what this key is.
-///
-/// Checked in the modes where a chord cannot be text. Insert mode is left out
-/// on purpose: nothing there would survive swallowing a keystroke to wait for a
-/// second one.
 fn window_prefix(key: KeyEvent, pending: &mut Option<Pending>) -> bool {
     if is_ctrl(key.modifiers) && key.code == KeyCode::Char('w') {
         *pending = Some(Pending::Window);
@@ -34,7 +15,6 @@ fn window_prefix(key: KeyEvent, pending: &mut Option<Pending>) -> bool {
     false
 }
 
-/// Bindings shared by every mode: window-level keys that must always work.
 fn universal(key: KeyEvent) -> Option<Action> {
     if !is_ctrl(key.modifiers) {
         return None;
@@ -46,8 +26,6 @@ fn universal(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('p') => Action::CycleBuffer { forward: false },
         KeyCode::Char('z') => Action::Undo,
         KeyCode::Char('y' | 'r') => Action::Redo,
-        // The chords everyone already has in their fingers. With nothing
-        // selected they fall back to the current line, as they do elsewhere.
         KeyCode::Char('c') => Action::Yank,
         KeyCode::Char('x') => Action::Cut,
         KeyCode::Char('v') => Action::Paste,
@@ -66,7 +44,6 @@ fn universal(key: KeyEvent) -> Option<Action> {
     })
 }
 
-/// Motions that mean the same thing in normal and visual mode.
 fn motion(key: KeyEvent) -> Option<Motion> {
     if !is_plain(key.modifiers) {
         return None;
@@ -87,16 +64,10 @@ fn motion(key: KeyEvent) -> Option<Motion> {
     })
 }
 
-/// The motion a shifted arrow, Home or End asks for.
-///
-/// Only the keys a modeless editor also selects with are listed. The letter
-/// motions are deliberately left out: `G` and `^` reach us with Shift set too,
-/// and they are commands rather than selections.
 fn shift_motion(key: KeyEvent) -> Option<Motion> {
     if !key.modifiers.contains(KeyModifiers::SHIFT) {
         return None;
     }
-    // Ctrl widens the step to a word, as it does in every modeless editor.
     let by_word = is_ctrl(key.modifiers);
     Some(match key.code {
         KeyCode::Left if by_word => Motion::WordBackward,
@@ -111,9 +82,6 @@ fn shift_motion(key: KeyEvent) -> Option<Motion> {
     })
 }
 
-/// Normal mode: keys are commands.
-///
-/// `pending` is set when a key only makes sense as the first half of a sequence.
 pub fn normal(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
     if window_prefix(key, pending) {
         return Action::None;
@@ -127,8 +95,6 @@ pub fn normal(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
     if let Some(motion) = motion(key) {
         return Action::Move(motion);
     }
-    // Alt with an arrow drops a second cursor, the way most modeless editors do
-    // it — the modal alternative would need a prefix nobody would guess.
     if key.modifiers.contains(KeyModifiers::ALT) {
         return match key.code {
             KeyCode::Down => Action::AddCursor { below: true },
@@ -160,7 +126,6 @@ pub fn normal(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
         KeyCode::Char('n') => Action::SearchRepeat { forward: true },
         KeyCode::Char('N') => Action::SearchRepeat { forward: false },
 
-        // Sequences: the second key decides what happens.
         KeyCode::Char(prefix @ ('g' | 'd' | 'y')) => {
             *pending = Some(Pending::Key(prefix));
             Action::None
@@ -179,7 +144,6 @@ pub fn normal(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
     }
 }
 
-/// The second key of a sequence started in normal or visual mode.
 pub fn pending(prefix: Pending, key: KeyEvent) -> Action {
     match prefix {
         Pending::Key(prefix) => sequence(prefix, key),
@@ -187,7 +151,6 @@ pub fn pending(prefix: Pending, key: KeyEvent) -> Action {
     }
 }
 
-/// The second key of a plain two-key sequence.
 fn sequence(prefix: char, key: KeyEvent) -> Action {
     match (prefix, key.code) {
         ('g', KeyCode::Char('g')) => Action::Move(Motion::DocStart),
@@ -201,12 +164,6 @@ fn sequence(prefix: char, key: KeyEvent) -> Action {
     }
 }
 
-/// The key after `Ctrl+W`.
-///
-/// The bindings follow vi, including its naming: `s` splits along a horizontal
-/// line and so stacks the windows, while `v` splits along a vertical one and
-/// puts them side by side. Ctrl is ignored, so holding it down through the
-/// whole sequence — `Ctrl+W Ctrl+V` — works as well as letting go.
 fn window(key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Char('s' | 'S') => Action::SplitWindow {
@@ -245,15 +202,8 @@ fn window(key: KeyEvent) -> Action {
     }
 }
 
-/// How many lines one notch of the wheel moves.
 const WHEEL_STEP: isize = 3;
 
-/// Mouse events.
-///
-/// A click focuses a window and places the caret, dragging selects, and the
-/// wheel scrolls whichever window it is over — focused or not, because looking
-/// somewhere is not the same as typing there. The button is released without a
-/// binding of its own: the selection a drag made is simply left standing.
 pub fn mouse(event: MouseEvent) -> Action {
     let (x, y) = (event.column, event.row);
     match event.kind {
@@ -273,13 +223,10 @@ pub fn mouse(event: MouseEvent) -> Action {
     }
 }
 
-/// Insert mode: printable keys become text.
 pub fn insert(key: KeyEvent) -> Action {
     if let Some(action) = universal(key) {
         return action;
     }
-    // A shifted arrow selects instead of moving, which drops out of insert
-    // mode: the selection has to be visible, and only visual mode paints one.
     if let Some(motion) = shift_motion(key) {
         return Action::Select(motion);
     }
@@ -305,15 +252,11 @@ pub fn insert(key: KeyEvent) -> Action {
             half: false,
         },
 
-        // Anything else printable is text. Control combinations were already
-        // handled above, so reaching here with a modifier means Shift or AltGr,
-        // both of which are part of the character crossterm reports.
         KeyCode::Char(ch) if is_plain(key.modifiers) => Action::Insert(ch),
         _ => Action::None,
     }
 }
 
-/// Visual mode: motions extend the selection.
 pub fn visual(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
     if window_prefix(key, pending) {
         return Action::None;
@@ -355,7 +298,6 @@ pub fn visual(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
     }
 }
 
-/// Command mode: the command bar owns the keyboard.
 pub fn command(key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc => Action::CommandCancel,
@@ -366,7 +308,6 @@ pub fn command(key: KeyEvent) -> Action {
     }
 }
 
-/// Tree mode: the file browser has the keyboard.
 pub fn tree(key: KeyEvent) -> Action {
     if is_ctrl(key.modifiers) && key.code == KeyCode::Char('b') {
         return Action::ToggleTree;
@@ -386,10 +327,8 @@ pub fn tree(key: KeyEvent) -> Action {
     }
 }
 
-/// Search mode: the query is edited while the document follows along.
 pub fn search(key: KeyEvent) -> Action {
     if is_ctrl(key.modifiers) {
-        // Stepping between matches without leaving the prompt.
         return match key.code {
             KeyCode::Char('n') => Action::SearchRepeat { forward: true },
             KeyCode::Char('p') => Action::SearchRepeat { forward: false },
