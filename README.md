@@ -63,6 +63,11 @@ Shift or the mouse is exclusive, so one press covers one character, while
 visual mode stays inclusive of the character under the caret. Each behaves the
 way the people who reach for it expect.
 
+**Word-wise keys** — `Ctrl+←` and `Ctrl+→` jump a word at a time,
+`Ctrl+Backspace` and `Ctrl+Delete` remove one. A run of spaces or tabs counts
+as a word of its own, so a single press clears the gap between two words, or a
+line's indentation, without swallowing the word beside it.
+
 **Typing** — indentation carried onto new lines, `}` pulled back to line up
 with its opener, and brackets and quotes closed as you type them. Typing the
 closing half steps over it instead of doubling it, backspace between the halves
@@ -99,10 +104,12 @@ Press `:help` inside the editor for the same list.
 | `i` `a` `I` `A` `o` `O` | enter insert mode |
 | `v` `V` | character-wise / line-wise visual mode |
 | `h j k l` `w b e` `0 ^ $` `gg G` | motions |
+| `Ctrl+←→` `Ctrl+Home/End` | jump by word, to the start or end of the file |
 | `Shift+←↑↓→` `Shift+Home/End` | select; `Ctrl+Shift+←→` by word |
 | `Ctrl+A` | select the whole file |
 | click, drag | place the caret, select |
 | `Backspace` `Delete` | remove the selection, or one character |
+| `Ctrl+Backspace` `Ctrl+Del` | remove a whole word, or a run of blanks |
 | `Ctrl+C` `Ctrl+X` `Ctrl+V` | copy, cut, paste — the selection, or the line |
 | `x` `dd` `yy` `p` `u` `Ctrl+R` | delete, yank, paste, undo, redo |
 | `/` `?` `n` `N` | search forwards, backwards, repeat |

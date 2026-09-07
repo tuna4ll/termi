@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Word-wise deletion** — `Ctrl+Backspace` and `Ctrl+Delete` remove a whole
+  word, at every cursor and as one undo step. A run of spaces or tabs is a unit
+  of its own, so one press clears the gap between two words or a line's
+  indentation without also taking the word beside it; at the edge of a line the
+  chord joins it to its neighbour instead of crossing into another word.
+- **Word-wise motion** — `Ctrl+←` and `Ctrl+→` jump a word at a time, and
+  `Ctrl+Home` / `Ctrl+End` reach the start and end of the file. Adding Shift
+  selects the same span, which `Ctrl+Shift+←/→` already did.
+- Terminals that report `Ctrl+Backspace` as a bare `0x08` — which arrives as
+  `Ctrl+H` — get the same binding, so the chord works without the kitty
+  keyboard protocol.
+
 ## [0.1.4] - 2026-09-06
 
 ### Added
