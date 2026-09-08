@@ -28,7 +28,7 @@ use crate::editor::edit::Edit;
 use crate::editor::window::{Window, WindowId, Windows};
 use crate::filesystem::tree::Tree;
 use crate::search::Search;
-use crate::terminal::{Terminal, encode_key};
+use crate::terminal::Terminal;
 use crate::theme::Theme;
 
 /// A one-line message shown in the command bar until the next keystroke.
@@ -200,11 +200,8 @@ impl App {
     /// Returns an error if the process has closed its input stream.
     pub fn send_terminal_key(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
         let id = self.windows.focus();
-        let bytes = encode_key(key);
-        if !bytes.is_empty()
-            && let Some(terminal) = self.terminals.get_mut(&id)
-        {
-            terminal.write(&bytes)?;
+        if let Some(terminal) = self.terminals.get_mut(&id) {
+            terminal.send_key(key)?;
         }
         Ok(())
     }
@@ -216,9 +213,16 @@ impl App {
     pub fn paste_terminal(&mut self, text: &str) -> Result<()> {
         let id = self.windows.focus();
         if let Some(terminal) = self.terminals.get_mut(&id) {
-            terminal.write(text.as_bytes())?;
+            terminal.paste(text)?;
         }
         Ok(())
+    }
+
+    /// Scroll one embedded terminal through its saved output.
+    pub fn scroll_terminal(&mut self, id: WindowId, delta: isize) {
+        if let Some(terminal) = self.terminals.get_mut(&id) {
+            terminal.scroll(delta);
+        }
     }
 
     /// Split the focused pane, leaving the new pane as an editor window.

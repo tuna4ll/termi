@@ -8,7 +8,7 @@
 //! windows or ratatui; the application decides where a session lives and the UI
 //! decides how its cells look.
 //!
-//! **Public API:** [`Terminal`], [`encode_key`].
+//! **Public API:** [`Terminal`].
 
 use std::fmt;
 use std::io::{Read, Write};
@@ -127,6 +127,48 @@ impl Terminal {
             .context("unable to write to the terminal")
     }
 
+    /// Encode and send one key, respecting the cursor mode requested by the
+    /// child application.
+    ///
+    /// # Errors
+    /// Returns an error when the child has closed its input stream.
+    pub fn send_key(&mut self, key: KeyEvent) -> Result<()> {
+        let application_cursor = self.with_screen(vt100::Screen::application_cursor);
+        self.state().parser.screen_mut().set_scrollback(0);
+        self.write(&encode_key(key, application_cursor))
+    }
+
+    /// Send pasted text, wrapping it when the child requested bracketed paste.
+    ///
+    /// # Errors
+    /// Returns an error when the child has closed its input stream.
+    pub fn paste(&mut self, text: &str) -> Result<()> {
+        let bracketed = self.with_screen(vt100::Screen::bracketed_paste);
+        self.state().parser.screen_mut().set_scrollback(0);
+        if bracketed {
+            self.write(b"\x1b[200~")?;
+        }
+        self.write(text.as_bytes())?;
+        if bracketed {
+            self.write(b"\x1b[201~")?;
+        }
+        Ok(())
+    }
+
+    /// Move through saved output. Negative deltas scroll away from the live
+    /// prompt and positive deltas return towards it.
+    pub fn scroll(&mut self, delta: isize) {
+        let mut state = self.state();
+        let screen = state.parser.screen_mut();
+        let current = screen.scrollback();
+        let next = if delta < 0 {
+            current.saturating_add(delta.unsigned_abs())
+        } else {
+            current.saturating_sub(delta.unsigned_abs())
+        };
+        screen.set_scrollback(next);
+    }
+
     /// Resize both the real PTY and its emulated screen.
     ///
     /// Zero-sized panes are promoted to one cell because neither backend
@@ -215,36 +257,56 @@ fn command_builder(command: Option<&str>) -> CommandBuilder {
 /// Encode one crossterm key event using the sequences understood by common
 /// terminal applications.
 #[must_use]
-pub fn encode_key(key: KeyEvent) -> Vec<u8> {
+fn encode_key(key: KeyEvent, application_cursor: bool) -> Vec<u8> {
     let mut bytes = Vec::new();
-    if key.modifiers.contains(KeyModifiers::ALT) {
-        bytes.push(0x1b);
-    }
 
     if key.modifiers.contains(KeyModifiers::CONTROL)
         && let KeyCode::Char(ch) = key.code
         && let Some(control) = control_byte(ch)
     {
+        push_alt_prefix(&mut bytes, &key);
         bytes.push(control);
         return bytes;
     }
 
     match key.code {
         KeyCode::Char(ch) => {
+            push_alt_prefix(&mut bytes, &key);
             let mut encoded = [0_u8; 4];
             bytes.extend_from_slice(ch.encode_utf8(&mut encoded).as_bytes());
         }
-        KeyCode::Enter => bytes.push(b'\r'),
-        KeyCode::Tab => bytes.push(b'\t'),
+        KeyCode::Enter => {
+            push_alt_prefix(&mut bytes, &key);
+            bytes.push(b'\r');
+        }
+        KeyCode::Tab => {
+            push_alt_prefix(&mut bytes, &key);
+            bytes.push(b'\t');
+        }
         KeyCode::BackTab => bytes.extend_from_slice(b"\x1b[Z"),
-        KeyCode::Backspace => bytes.push(0x7f),
+        KeyCode::Backspace => {
+            push_alt_prefix(&mut bytes, &key);
+            bytes.push(0x7f);
+        }
         KeyCode::Esc => bytes.push(0x1b),
-        KeyCode::Up => bytes.extend_from_slice(modified_csi(&key, 'A').as_bytes()),
-        KeyCode::Down => bytes.extend_from_slice(modified_csi(&key, 'B').as_bytes()),
-        KeyCode::Right => bytes.extend_from_slice(modified_csi(&key, 'C').as_bytes()),
-        KeyCode::Left => bytes.extend_from_slice(modified_csi(&key, 'D').as_bytes()),
-        KeyCode::Home => bytes.extend_from_slice(modified_csi(&key, 'H').as_bytes()),
-        KeyCode::End => bytes.extend_from_slice(modified_csi(&key, 'F').as_bytes()),
+        KeyCode::Up => {
+            bytes.extend_from_slice(cursor_key(&key, 'A', application_cursor).as_bytes());
+        }
+        KeyCode::Down => {
+            bytes.extend_from_slice(cursor_key(&key, 'B', application_cursor).as_bytes());
+        }
+        KeyCode::Right => {
+            bytes.extend_from_slice(cursor_key(&key, 'C', application_cursor).as_bytes());
+        }
+        KeyCode::Left => {
+            bytes.extend_from_slice(cursor_key(&key, 'D', application_cursor).as_bytes());
+        }
+        KeyCode::Home => {
+            bytes.extend_from_slice(cursor_key(&key, 'H', application_cursor).as_bytes());
+        }
+        KeyCode::End => {
+            bytes.extend_from_slice(cursor_key(&key, 'F', application_cursor).as_bytes());
+        }
         KeyCode::Insert => bytes.extend_from_slice(b"\x1b[2~"),
         KeyCode::Delete => bytes.extend_from_slice(b"\x1b[3~"),
         KeyCode::PageUp => bytes.extend_from_slice(b"\x1b[5~"),
@@ -253,6 +315,23 @@ pub fn encode_key(key: KeyEvent) -> Vec<u8> {
         _ => {}
     }
     bytes
+}
+
+fn push_alt_prefix(bytes: &mut Vec<u8>, key: &KeyEvent) {
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        bytes.push(0x1b);
+    }
+}
+
+fn cursor_key(key: &KeyEvent, suffix: char, application_cursor: bool) -> String {
+    let modified = key
+        .modifiers
+        .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT | KeyModifiers::CONTROL);
+    if application_cursor && !modified {
+        format!("\x1bO{suffix}")
+    } else {
+        modified_csi(key, suffix)
+    }
 }
 
 fn control_byte(ch: char) -> Option<u8> {
@@ -306,11 +385,14 @@ mod tests {
     #[test]
     fn printable_and_control_keys_are_encoded() {
         assert_eq!(
-            encode_key(KeyEvent::new(KeyCode::Char('ğ'), KeyModifiers::NONE)),
+            encode_key(KeyEvent::new(KeyCode::Char('ğ'), KeyModifiers::NONE), false,),
             "ğ".as_bytes()
         );
         assert_eq!(
-            encode_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            encode_key(
+                KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL),
+                false,
+            ),
             b"\x03"
         );
     }
@@ -318,12 +400,20 @@ mod tests {
     #[test]
     fn alt_and_modified_arrows_use_terminal_sequences() {
         assert_eq!(
-            encode_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT)),
+            encode_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::ALT), false,),
             b"\x1bx"
         );
         assert_eq!(
-            encode_key(KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL)),
+            encode_key(KeyEvent::new(KeyCode::Up, KeyModifiers::CONTROL), false,),
             b"\x1b[1;5A"
+        );
+        assert_eq!(
+            encode_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE), true),
+            b"\x1bOA"
+        );
+        assert_eq!(
+            encode_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT), false),
+            b"\x1b[1;3A"
         );
     }
 }

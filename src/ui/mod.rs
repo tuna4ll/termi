@@ -25,7 +25,8 @@ use crate::editor::window::tree::Axis;
 use crate::theme::Theme;
 use crate::ui::layout::Panes;
 use crate::ui::widgets::{
-    CommandBar, EditorView, FileTree, Popup, SearchBox, StatusBar, Tab, TabBar, editor_view,
+    CommandBar, EditorView, FileTree, Popup, SearchBox, StatusBar, Tab, TabBar, TerminalStatusBar,
+    TerminalView, editor_view,
 };
 
 /// Where each part of the interface goes this frame.
@@ -130,7 +131,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         );
     }
 
-    frame.render_widget(status_bar(app), regions.status);
+    if let Some(terminal) = app.terminal(app.windows.focus()) {
+        frame.render_widget(
+            TerminalStatusBar {
+                name: terminal.name(),
+                running: terminal.is_running(),
+                theme: &app.theme,
+            },
+            regions.status,
+        );
+    } else {
+        frame.render_widget(status_bar(app), regions.status);
+    }
 
     // The bottom line is either the search prompt, the command line, or the
     // message area — never more than one at a time.
@@ -184,6 +196,14 @@ fn prepare(app: &mut App, panes: &Panes) {
     let focus = app.windows.focus();
 
     for (id, rect) in &panes.windows {
+        app.windows.get_mut(*id).area = Area::new(rect.x, rect.y, rect.width, rect.height);
+        if let Some(terminal) = app.terminal_mut(*id) {
+            if let Err(error) = terminal.resize(rect.height, rect.width) {
+                app.error(error.to_string());
+            }
+            continue;
+        }
+
         let App {
             buffers,
             windows,
@@ -192,7 +212,6 @@ fn prepare(app: &mut App, panes: &Panes) {
         } = &mut *app;
 
         let window = windows.get_mut(*id);
-        window.area = Area::new(rect.x, rect.y, rect.width, rect.height);
         let index = window.buffer;
 
         // A window that did not make the last edit is never told that the text
@@ -223,6 +242,18 @@ fn draw_windows(frame: &mut Frame, app: &App, panes: &Panes) -> Option<(u16, u16
 
     for (id, rect) in &panes.windows {
         let focused = *id == focus;
+        if let Some(terminal) = app.terminal(*id) {
+            let view = TerminalView {
+                terminal,
+                focused,
+                theme: &app.theme,
+            };
+            if focused {
+                caret = view.caret_position(*rect);
+            }
+            frame.render_widget(view, *rect);
+            continue;
+        }
         let window = app.windows.get(*id);
         let view = EditorView {
             buffer: &app.buffers[window.buffer],

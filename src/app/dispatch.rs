@@ -135,7 +135,9 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::DragTo { x, y } => drag(app, x, y),
         Action::ScrollAt { x, y, delta } => {
             if let Some(id) = app.windows.at(x, y) {
-                if !app.is_terminal(id) {
+                if app.is_terminal(id) {
+                    app.scroll_terminal(id, delta);
+                } else {
                     app.scroll_window(id, delta);
                 }
             }
