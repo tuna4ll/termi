@@ -29,6 +29,8 @@ const SCROLLBACK_ROWS: usize = 10_000;
 const MIN_ROWS: u16 = 2;
 const MIN_COLS: u16 = 2;
 
+type SharedWriter = Arc<Mutex<Box<dyn Write + Send>>>;
+
 struct ScreenState {
     parser: vt100::Parser,
     running: bool,
@@ -37,7 +39,7 @@ struct ScreenState {
 /// One child process connected to an emulated terminal screen.
 pub struct Terminal {
     screen: Arc<Mutex<ScreenState>>,
-    writer: Box<dyn Write + Send>,
+    writer: SharedWriter,
     master: Box<dyn MasterPty + Send>,
     child: Box<dyn Child + Send + Sync>,
     size: PtySize,
@@ -88,11 +90,12 @@ impl Terminal {
             .master
             .take_writer()
             .context("unable to write to the pseudo-terminal")?;
+        let writer = Arc::new(Mutex::new(writer));
         let screen = Arc::new(Mutex::new(ScreenState {
             parser: vt100::Parser::new(INITIAL_ROWS, INITIAL_COLS, SCROLLBACK_ROWS),
             running: true,
         }));
-        read_output(Arc::clone(&screen), reader);
+        read_output(Arc::clone(&screen), Arc::clone(&writer), reader);
 
         Ok(Self {
             screen,
@@ -126,9 +129,13 @@ impl Terminal {
     /// # Errors
     /// Returns an error when the child has closed its input stream.
     pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
-        self.writer
+        let mut writer = self
+            .writer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        writer
             .write_all(bytes)
-            .and_then(|()| self.writer.flush())
+            .and_then(|()| writer.flush())
             .context("unable to write to the terminal")
     }
 
@@ -215,9 +222,14 @@ impl Drop for Terminal {
     }
 }
 
-fn read_output(screen: Arc<Mutex<ScreenState>>, mut reader: Box<dyn Read + Send>) {
+fn read_output(
+    screen: Arc<Mutex<ScreenState>>,
+    writer: SharedWriter,
+    mut reader: Box<dyn Read + Send>,
+) {
     thread::spawn(move || {
         let mut bytes = [0_u8; 8192];
+        let mut responder = QueryResponder::default();
         loop {
             match reader.read(&mut bytes) {
                 Ok(0) | Err(_) => {
@@ -227,20 +239,154 @@ fn read_output(screen: Arc<Mutex<ScreenState>>, mut reader: Box<dyn Read + Send>
                         .running = false;
                     break;
                 }
-                Ok(count) => screen
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .parser
-                    .process(&bytes[..count]),
+                Ok(count) => {
+                    let replies = {
+                        let mut state = screen
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        state.parser.process(&bytes[..count]);
+                        responder.replies(&bytes[..count], state.parser.screen())
+                    };
+                    if !replies.is_empty() {
+                        let mut writer = writer
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        let _ = writer.write_all(&replies).and_then(|()| writer.flush());
+                    }
+                }
             }
         }
     });
+}
+
+/// Replies to terminal capability queries consumed by the screen parser.
+///
+/// Interactive shells put the PTY in raw mode while they probe the terminal.
+/// Without replies they keep waiting and stop echoing typed characters, which
+/// looks exactly like a dead input path even though the bytes reach the child.
+#[derive(Debug, Default)]
+struct QueryResponder {
+    incomplete: Vec<u8>,
+}
+
+impl QueryResponder {
+    fn replies(&mut self, bytes: &[u8], screen: &vt100::Screen) -> Vec<u8> {
+        let mut input = std::mem::take(&mut self.incomplete);
+        input.extend_from_slice(bytes);
+        let mut replies = Vec::new();
+        let mut index = 0;
+
+        while index < input.len() {
+            if input[index] != 0x1b {
+                index += 1;
+                continue;
+            }
+            let Some(kind) = input.get(index + 1).copied() else {
+                self.incomplete.extend_from_slice(&input[index..]);
+                break;
+            };
+            match kind {
+                b'[' => {
+                    let Some(end) = input[index + 2..]
+                        .iter()
+                        .position(|byte| (0x40..=0x7e).contains(byte))
+                        .map(|offset| index + 2 + offset)
+                    else {
+                        self.remember(&input[index..]);
+                        break;
+                    };
+                    csi_reply(&input[index + 2..=end], screen, &mut replies);
+                    index = end + 1;
+                }
+                b']' | b'P' => {
+                    let Some((end, after)) = string_end(&input, index + 2) else {
+                        self.remember(&input[index..]);
+                        break;
+                    };
+                    let payload = &input[index + 2..end];
+                    if kind == b']' {
+                        osc_reply(payload, &mut replies);
+                    } else {
+                        dcs_reply(payload, &mut replies);
+                    }
+                    index = after;
+                }
+                _ => index += 2,
+            }
+        }
+        replies
+    }
+
+    fn remember(&mut self, bytes: &[u8]) {
+        // Escape strings are tiny in practice. A cap prevents malformed child
+        // output from turning an unfinished sequence into unbounded memory.
+        if bytes.len() <= 4096 {
+            self.incomplete.extend_from_slice(bytes);
+        }
+    }
+}
+
+fn string_end(input: &[u8], start: usize) -> Option<(usize, usize)> {
+    let mut index = start;
+    while index < input.len() {
+        if input[index] == 0x07 {
+            return Some((index, index + 1));
+        }
+        if input[index] == 0x1b && input.get(index + 1) == Some(&b'\\') {
+            return Some((index, index + 2));
+        }
+        index += 1;
+    }
+    None
+}
+
+fn csi_reply(sequence: &[u8], screen: &vt100::Screen, replies: &mut Vec<u8>) {
+    match sequence {
+        b"?u" => replies.extend_from_slice(b"\x1b[?0u"),
+        b">q" | b">0q" => replies.extend_from_slice(
+            format!("\x1bP>|termi {}\x1b\\", env!("CARGO_PKG_VERSION")).as_bytes(),
+        ),
+        b"c" | b"0c" => replies.extend_from_slice(b"\x1b[?1;2c"),
+        b">c" | b">0c" => replies.extend_from_slice(b"\x1b[>0;1;0c"),
+        b"5n" => replies.extend_from_slice(b"\x1b[0n"),
+        b"6n" | b"?6n" => {
+            let (row, col) = screen.cursor_position();
+            if sequence.starts_with(b"?") {
+                replies.extend_from_slice(format!("\x1b[?{};{}R", row + 1, col + 1).as_bytes());
+            } else {
+                replies.extend_from_slice(format!("\x1b[{};{}R", row + 1, col + 1).as_bytes());
+            }
+        }
+        _ => {}
+    }
+}
+
+fn osc_reply(sequence: &[u8], replies: &mut Vec<u8>) {
+    match sequence {
+        b"10;?" => replies.extend_from_slice(b"\x1b]10;rgb:c5c5/cdcd/d9d9\x1b\\"),
+        b"11;?" => replies.extend_from_slice(b"\x1b]11;rgb:1e1e/2222/2727\x1b\\"),
+        _ => {}
+    }
+}
+
+fn dcs_reply(sequence: &[u8], replies: &mut Vec<u8>) {
+    if let Some(capability) = sequence.strip_prefix(b"+q") {
+        replies.extend_from_slice(b"\x1bP0+r");
+        replies.extend_from_slice(capability);
+        replies.extend_from_slice(b"\x1b\\");
+    } else if let Some(setting) = sequence.strip_prefix(b"$q") {
+        replies.extend_from_slice(b"\x1bP0$r");
+        replies.extend_from_slice(setting);
+        replies.extend_from_slice(b"\x1b\\");
+    }
 }
 
 #[cfg(unix)]
 fn command_builder(command: Option<&str>) -> CommandBuilder {
     let shell = std::env::var_os("SHELL").unwrap_or_else(|| "/bin/sh".into());
     let mut builder = CommandBuilder::new(shell);
+    builder.env("TERM", "xterm-256color");
+    builder.env("COLORTERM", "truecolor");
     if let Some(command) = command {
         builder.arg("-lc");
         builder.arg(command);
@@ -252,6 +398,8 @@ fn command_builder(command: Option<&str>) -> CommandBuilder {
 fn command_builder(command: Option<&str>) -> CommandBuilder {
     let shell = std::env::var_os("COMSPEC").unwrap_or_else(|| "cmd.exe".into());
     let mut builder = CommandBuilder::new(shell);
+    builder.env("TERM", "xterm-256color");
+    builder.env("COLORTERM", "truecolor");
     if let Some(command) = command {
         builder.arg("/C");
         builder.arg(command);
@@ -472,5 +620,48 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_default_shell_accepts_a_typed_command() {
+        let cwd = std::env::current_dir().expect("the test has a working directory");
+        let mut terminal = Terminal::spawn(None, &cwd).expect("spawn the default shell");
+        let command = r"printf '\x54\x45\x52\x4d\x49\x5f\x53\x48\x45\x4c\x4c\x5f\x4f\x4b'";
+        for ch in command.chars() {
+            terminal
+                .send_key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE))
+                .expect("type into the default shell");
+        }
+        terminal
+            .send_key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            .expect("submit the shell command");
+        let deadline = Instant::now() + Duration::from_secs(3);
+
+        loop {
+            let contents = terminal.with_screen(vt100::Screen::contents);
+            if contents.contains("TERMI_SHELL_OK") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "default shell never accepted the command: {contents:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn shell_capability_queries_receive_terminal_replies() {
+        let mut parser = vt100::Parser::new(24, 80, 0);
+        let queries = b"\x1b[?u\x1b[>0q\x1b]11;?\x1b\\\x1bP+q696e646e\x1b\\\x1b[0c";
+        parser.process(queries);
+
+        let replies = QueryResponder::default().replies(queries, parser.screen());
+        assert!(replies.windows(5).any(|part| part == b"\x1b[?0u"));
+        assert!(replies.windows(4).any(|part| part == b">|te"));
+        assert!(replies.windows(5).any(|part| part == b"]11;r"));
+        assert!(replies.windows(5).any(|part| part == b"0+r69"));
+        assert!(replies.ends_with(b"\x1b[?1;2c"));
     }
 }
