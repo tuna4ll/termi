@@ -1,6 +1,6 @@
 [package]
 name = "termi"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 # Edition 2024 alone needs 1.85, but the code uses let-chains, which only
 # stabilised in 1.88. Claiming 1.85 turns "your toolchain is too old" into a
@@ -41,6 +41,11 @@ notify = "8"
 # Terminal cell width for CJK / wide graphemes.
 unicode-width = "0.2"
 unicode-segmentation = "1.13"
+
+# Embedded terminal sessions: portable-pty owns the OS-specific pseudo-terminal
+# and vt100 turns the byte stream into cells the ratatui renderer can paint.
+portable-pty = "0.9"
+vt100 = "0.16"
 
 anyhow = "1"
 

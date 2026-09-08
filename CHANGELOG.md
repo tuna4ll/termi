@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-09-09
+
+### Added
+
+- **Embedded terminal windows** — `:terminal` opens the platform shell below
+  the editor, `Ctrl+W t` provides a direct shortcut, and `:terminal <command>`
+  runs a command in the same kind of pane.
+  Each session uses a real pseudo-terminal, renders ANSI colours and text
+  attributes, follows window resizes, supports application cursor mode and
+  bracketed paste, and keeps 10,000 lines of mouse-scrollable history.
+  `Ctrl+W` remains the escape into Termi's existing focus, split, resize and
+  close commands while the child process owns every other key.
+
 ## [0.1.6] - 2026-09-08
 
 ### Added
@@ -167,7 +180,8 @@ First release.
   slots they name.
 - **Configuration** — TOML, with every key optional and unknown keys reported.
 
-[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/tuna4ll/termi/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/tuna4ll/termi/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/tuna4ll/termi/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/tuna4ll/termi/compare/v0.1.3...v0.1.4

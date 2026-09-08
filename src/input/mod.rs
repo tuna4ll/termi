@@ -57,6 +57,8 @@ pub enum Action {
     CycleWindow,
     ResizeWindow { axis: Axis, delta: i16 },
     EqualiseWindows,
+    OpenTerminal,
+    TerminalInput(KeyEvent),
     ClickAt { x: u16, y: u16 },
     DragTo { x: u16, y: u16 },
     ScrollAt { x: u16, y: u16, delta: isize },
@@ -100,6 +102,7 @@ impl Input {
             Mode::Command => keymap::command(key),
             Mode::Search => keymap::search(key),
             Mode::Tree => keymap::tree(key),
+            Mode::Terminal => keymap::terminal(key, &mut self.pending),
         };
         if matches!(action, Action::EnterMode(_)) {
             self.pending = None;
@@ -326,5 +329,36 @@ mod tests {
             input.handle(plain('A'), Mode::Tree),
             Action::TreeCreate { directory: true }
         );
+    }
+
+    #[test]
+    fn terminal_keys_are_forwarded_except_for_the_window_prefix() {
+        let mut input = Input::default();
+        let letter = plain('x');
+        assert_eq!(
+            input.handle(letter, Mode::Terminal),
+            Action::TerminalInput(letter)
+        );
+
+        let ctrl_w = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+        assert_eq!(input.handle(ctrl_w, Mode::Terminal), Action::None);
+        assert_eq!(
+            input.handle(plain('c'), Mode::Terminal),
+            Action::CloseWindow
+        );
+    }
+
+    #[test]
+    fn ctrl_w_t_opens_a_terminal_from_editor_and_terminal_modes() {
+        let ctrl_w = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+
+        for mode in [Mode::Normal, Mode::Terminal] {
+            let mut input = Input::default();
+            assert_eq!(input.handle(ctrl_w, mode), Action::None);
+            assert_eq!(input.handle(plain('t'), mode), Action::OpenTerminal);
+
+            assert_eq!(input.handle(ctrl_w, mode), Action::None);
+            assert_eq!(input.handle(plain('T'), mode), Action::OpenTerminal);
+        }
     }
 }

@@ -182,6 +182,15 @@ pub fn pending(prefix: Pending, key: KeyEvent) -> Action {
     }
 }
 
+/// Forward terminal keys verbatim while reserving Ctrl+W for pane management.
+pub fn terminal(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
+    if window_prefix(key, pending) {
+        Action::None
+    } else {
+        Action::TerminalInput(key)
+    }
+}
+
 fn sequence(prefix: char, key: KeyEvent) -> Action {
     match (prefix, key.code) {
         ('g', KeyCode::Char('g')) => Action::Move(Motion::DocStart),
@@ -229,6 +238,7 @@ fn window(key: KeyEvent) -> Action {
             delta: -1,
         },
         KeyCode::Char('=') => Action::EqualiseWindows,
+        KeyCode::Char('t' | 'T') => Action::OpenTerminal,
         _ => Action::None,
     }
 }

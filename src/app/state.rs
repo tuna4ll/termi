@@ -13,6 +13,7 @@
 //!
 //! **Public API:** [`App`], [`Status`].
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
@@ -27,6 +28,7 @@ use crate::editor::edit::Edit;
 use crate::editor::window::{Window, WindowId, Windows};
 use crate::filesystem::tree::Tree;
 use crate::search::Search;
+use crate::terminal::Terminal;
 use crate::theme::Theme;
 
 /// A one-line message shown in the command bar until the next keystroke.
@@ -51,6 +53,12 @@ pub struct App {
     pub buffers: Vec<Buffer>,
     /// Open windows and the way they divide the screen. Never empty.
     pub windows: Windows,
+    /// Terminal sessions keyed by the editor window they replace on screen.
+    ///
+    /// Keeping this in the application layer lets the generic window tree stay
+    /// independent of processes while editor and terminal panes share all of
+    /// its focus, split and resize behaviour.
+    terminals: HashMap<WindowId, Terminal>,
     /// Text typed after `:` while in command mode.
     pub command_line: String,
     /// Message shown in the command bar.
@@ -113,6 +121,7 @@ impl App {
             theme,
             buffers: vec![Buffer::empty()],
             windows: Windows::new(Window::new(0)),
+            terminals: HashMap::new(),
             command_line: String::new(),
             status: Status::default(),
             clipboard,
@@ -146,6 +155,123 @@ impl App {
     /// Mutable access to the focused window.
     pub fn window_mut(&mut self) -> &mut Window {
         self.windows.focused_mut()
+    }
+
+    /// Whether `id` currently displays an embedded terminal.
+    #[must_use]
+    pub fn is_terminal(&self, id: WindowId) -> bool {
+        self.terminals.contains_key(&id)
+    }
+
+    /// Whether the focused window displays an embedded terminal.
+    #[must_use]
+    pub fn terminal_focused(&self) -> bool {
+        self.is_terminal(self.windows.focus())
+    }
+
+    /// The terminal displayed by `id`, if that window has one.
+    #[must_use]
+    pub fn terminal(&self, id: WindowId) -> Option<&Terminal> {
+        self.terminals.get(&id)
+    }
+
+    /// Mutable access to the terminal displayed by `id`.
+    pub fn terminal_mut(&mut self, id: WindowId) -> Option<&mut Terminal> {
+        self.terminals.get_mut(&id)
+    }
+
+    /// Open a terminal below the focused window and aim the keyboard at it.
+    ///
+    /// # Errors
+    /// Returns an error without changing the window layout when the process or
+    /// pseudo-terminal cannot be started.
+    pub fn open_terminal(&mut self, command: Option<&str>) -> Result<WindowId> {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let terminal = Terminal::spawn(command, &cwd)?;
+        let id = self.windows.split(crate::editor::window::Axis::Vertical);
+        self.terminals.insert(id, terminal);
+        self.mode = Mode::Terminal;
+        Ok(id)
+    }
+
+    /// Send a key press to the focused terminal.
+    ///
+    /// # Errors
+    /// Returns an error if the process has closed its input stream.
+    pub fn send_terminal_key(&mut self, key: crossterm::event::KeyEvent) -> Result<()> {
+        let id = self.windows.focus();
+        if let Some(terminal) = self.terminals.get_mut(&id) {
+            terminal.send_key(key)?;
+        }
+        Ok(())
+    }
+
+    /// Send pasted text to the focused terminal.
+    ///
+    /// # Errors
+    /// Returns an error if the process has closed its input stream.
+    pub fn paste_terminal(&mut self, text: &str) -> Result<()> {
+        let id = self.windows.focus();
+        if let Some(terminal) = self.terminals.get_mut(&id) {
+            terminal.paste(text)?;
+        }
+        Ok(())
+    }
+
+    /// Scroll one embedded terminal through its saved output.
+    pub fn scroll_terminal(&mut self, id: WindowId, delta: isize) {
+        if let Some(terminal) = self.terminals.get_mut(&id) {
+            terminal.scroll(delta);
+        }
+    }
+
+    /// Split the focused pane, leaving the new pane as an editor window.
+    pub fn split_window(&mut self, axis: crate::editor::window::Axis) -> WindowId {
+        let was_terminal = self.terminal_focused();
+        let id = self.windows.split(axis);
+        if was_terminal {
+            self.mode = Mode::Normal;
+        }
+        id
+    }
+
+    /// Close a pane, or reveal its editor view when it is the last terminal.
+    pub fn close_window(&mut self, id: WindowId) -> bool {
+        if self.windows.count() == 1 && self.terminals.remove(&id).is_some() {
+            self.mode = Mode::Normal;
+            return true;
+        }
+        if !self.windows.close(id) {
+            return false;
+        }
+        let removed_terminal = self.terminals.remove(&id).is_some();
+        if self.terminal_focused() {
+            self.mode = Mode::Terminal;
+        } else if removed_terminal || self.mode == Mode::Terminal {
+            self.mode = Mode::Normal;
+        }
+        true
+    }
+
+    /// Close every pane except the focused one and stop their terminal sessions.
+    pub fn close_other_windows(&mut self) {
+        let focus = self.windows.focus();
+        self.windows.close_others();
+        self.terminals.retain(|id, _| *id == focus);
+        if self.terminal_focused() {
+            self.mode = Mode::Terminal;
+        } else if self.mode == Mode::Terminal {
+            self.mode = Mode::Normal;
+        }
+    }
+
+    /// Match the modal state to the kind of content in the focused pane.
+    pub fn sync_mode_to_focus(&mut self) {
+        self.mode = if self.terminal_focused() {
+            Mode::Terminal
+        } else {
+            Mode::Normal
+        };
     }
 
     /// The focused buffer and window, borrowed together for one edit.
@@ -283,7 +409,9 @@ impl App {
     /// caller here means the exclusive one.
     #[must_use]
     pub fn has_selection(&self) -> bool {
-        !self.mode.is_visual() && self.window().cursors().iter().any(Cursor::has_selection)
+        !self.terminal_focused()
+            && !self.mode.is_visual()
+            && self.window().cursors().iter().any(Cursor::has_selection)
     }
 
     /// Whether any buffer has unsaved changes.
