@@ -42,6 +42,11 @@ notify = "8"
 unicode-width = "0.2"
 unicode-segmentation = "1.13"
 
+# Embedded terminal sessions: portable-pty owns the OS-specific pseudo-terminal
+# and vt100 turns the byte stream into cells the ratatui renderer can paint.
+portable-pty = "0.9"
+vt100 = "0.16"
+
 anyhow = "1"
 
 [lints.rust]

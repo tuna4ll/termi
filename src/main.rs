@@ -18,6 +18,7 @@ mod input;
 mod renderer;
 mod search;
 mod syntax;
+mod terminal;
 mod theme;
 mod ui;
 mod undo;
