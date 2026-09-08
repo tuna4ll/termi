@@ -10,7 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Embedded terminal windows** — `:terminal` opens the platform shell below
-  the editor and `:terminal <command>` runs a command in the same kind of pane.
+  the editor, `Ctrl+W t` provides a direct shortcut, and `:terminal <command>`
+  runs a command in the same kind of pane.
   Each session uses a real pseudo-terminal, renders ANSI colours and text
   attributes, follows window resizes, supports application cursor mode and
   bracketed paste, and keeps 10,000 lines of mouse-scrollable history.

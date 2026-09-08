@@ -102,7 +102,8 @@ editor; `:terminal <command>` runs one command there instead. It is a real PTY,
 so interactive programs, ANSI colours, alternate screens, resized panes and
 bracketed paste work inside Termi. Terminal input goes straight to the child;
 use `Ctrl+W` followed by the usual window key to move, split, resize or close
-the pane. The mouse wheel moves through 10,000 lines of terminal history.
+the pane. `Ctrl+W t` opens another terminal. The mouse wheel moves through
+10,000 lines of terminal history.
 
 **Looks** — dark and light themes built in, plus TOML themes that override only
 the slots you care about.
@@ -132,6 +133,7 @@ Press `:help` inside the editor for the same list.
 | `Ctrl+W` `s` `v` | split the window across / down |
 | `Ctrl+W` `h j k l` `w` | move the focus between windows |
 | `Ctrl+W` `c` `o` | close this window / close all the others |
+| `Ctrl+W` `t` | open a terminal window |
 | `Ctrl+W` `+` `-` `<` `>` `=` | resize windows, or even them up |
 | `:terminal [command]` | open a shell or command in a new terminal window |
 | `Ctrl+S` `Ctrl+Q` | save, quit |

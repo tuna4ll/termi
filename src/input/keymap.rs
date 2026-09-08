@@ -238,6 +238,7 @@ fn window(key: KeyEvent) -> Action {
             delta: -1,
         },
         KeyCode::Char('=') => Action::EqualiseWindows,
+        KeyCode::Char('t' | 'T') => Action::OpenTerminal,
         _ => Action::None,
     }
 }

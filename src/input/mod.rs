@@ -57,6 +57,7 @@ pub enum Action {
     CycleWindow,
     ResizeWindow { axis: Axis, delta: i16 },
     EqualiseWindows,
+    OpenTerminal,
     TerminalInput(KeyEvent),
     ClickAt { x: u16, y: u16 },
     DragTo { x: u16, y: u16 },
@@ -345,5 +346,19 @@ mod tests {
             input.handle(plain('c'), Mode::Terminal),
             Action::CloseWindow
         );
+    }
+
+    #[test]
+    fn ctrl_w_t_opens_a_terminal_from_editor_and_terminal_modes() {
+        let ctrl_w = KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL);
+
+        for mode in [Mode::Normal, Mode::Terminal] {
+            let mut input = Input::default();
+            assert_eq!(input.handle(ctrl_w, mode), Action::None);
+            assert_eq!(input.handle(plain('t'), mode), Action::OpenTerminal);
+
+            assert_eq!(input.handle(ctrl_w, mode), Action::None);
+            assert_eq!(input.handle(plain('T'), mode), Action::OpenTerminal);
+        }
     }
 }

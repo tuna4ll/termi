@@ -23,10 +23,10 @@ CLIPBOARD Ctrl+C copy    Ctrl+X cut    Ctrl+V paste
 SEARCH    / next      ? previous      n / N repeat
 FILES     Ctrl+B tree     a file / A directory        Ctrl+S save
           Ctrl+N / Ctrl+P buffers
-WINDOWS   Ctrl+W then     s / v split     c close     o only
+WINDOWS   Ctrl+W then     s / v split     c close     o only      t terminal
                           h j k l focus   w next      = even
                           + - taller      < > wider
-TERMINAL  :terminal [command]        Ctrl+W then window command
+TERMINAL  :terminal [command]        Ctrl+W t opens another terminal
 
 COMMANDS  :w [path]  :q[!]  :wq  :e[!] path  :touch path  :mkdir path
           :bn  :bp

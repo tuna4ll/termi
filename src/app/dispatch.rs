@@ -126,6 +126,11 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::CycleWindow => cycle_window(app),
         Action::ResizeWindow { axis, delta } => app.windows.resize(axis, delta),
         Action::EqualiseWindows => app.windows.equalise(),
+        Action::OpenTerminal => {
+            if let Err(error) = app.open_terminal(None) {
+                app.error(format!("unable to open terminal: {error}"));
+            }
+        }
         Action::TerminalInput(key) => {
             if let Err(error) = app.send_terminal_key(key) {
                 app.error(error.to_string());
