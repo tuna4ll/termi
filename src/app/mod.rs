@@ -69,9 +69,15 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
                 dispatch::apply(app, action)?;
             }
             Event::Paste(text) => {
-                let mut edit = app.edit();
-                edit.insert_text(&text);
-                edit.checkpoint();
+                if app.terminal_focused() {
+                    if let Err(error) = app.paste_terminal(&text) {
+                        app.error(error.to_string());
+                    }
+                } else {
+                    let mut edit = app.edit();
+                    edit.insert_text(&text);
+                    edit.checkpoint();
+                }
             }
             Event::Resize(_, _) => tui.clear()?,
             _ => {}

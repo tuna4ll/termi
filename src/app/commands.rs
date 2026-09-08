@@ -26,6 +26,7 @@ FILES     Ctrl+B tree     a file / A directory        Ctrl+S save
 WINDOWS   Ctrl+W then     s / v split     c close     o only
                           h j k l focus   w next      = even
                           + - taller      < > wider
+TERMINAL  :terminal [command]        Ctrl+W then window command
 
 COMMANDS  :w [path]  :q[!]  :wq  :e[!] path  :touch path  :mkdir path
           :bn  :bp
@@ -34,10 +35,27 @@ COMMANDS  :w [path]  :q[!]  :wq  :e[!] path  :touch path  :mkdir path
           :%s/pattern/replacement/g";
 
 pub fn run(app: &mut App, line: &str) {
+    if let Some(command) = terminal_command(line) {
+        match app.open_terminal(command) {
+            Ok(_) => app.clear_status(),
+            Err(error) => app.error(format!("unable to open terminal: {error}")),
+        }
+        return;
+    }
     match parser::parse(line) {
         Ok(command) => execute(app, command),
         Err(message) => app.error(message),
     }
+}
+
+/// Recognise the application-owned terminal command before the editor command
+/// parser sees it. The editor core stays unaware of processes this way.
+fn terminal_command(input: &str) -> Option<Option<&str>> {
+    let input = input.trim();
+    let (name, rest) = input
+        .split_once(char::is_whitespace)
+        .map_or((input, ""), |(name, rest)| (name, rest.trim()));
+    matches!(name, "term" | "terminal").then_some((!rest.is_empty()).then_some(rest))
 }
 
 fn execute(app: &mut App, command: Command) {
@@ -51,14 +69,14 @@ fn execute(app: &mut App, command: Command) {
             }
         }
         Command::Split { axis } => {
-            app.windows.split(axis);
+            app.split_window(axis);
         }
         Command::CloseWindow => {
-            if !app.windows.close(app.windows.focus()) {
+            if !app.close_window(app.windows.focus()) {
                 app.info("only one window");
             }
         }
-        Command::OnlyWindow => app.windows.close_others(),
+        Command::OnlyWindow => app.close_other_windows(),
         Command::Edit { path, force } => edit(app, path, force),
         Command::CreateFile(path) => create_path(app, path, false),
         Command::CreateDirectory(path) => create_path(app, path, true),
@@ -128,7 +146,7 @@ fn write(app: &mut App, path: Option<PathBuf>) {
 
 fn quit(app: &mut App, force: bool) {
     if app.windows.count() > 1 {
-        app.windows.close(app.windows.focus());
+        app.close_window(app.windows.focus());
         return;
     }
     if !force && app.buffer().document.is_dirty() {
@@ -269,6 +287,16 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create fixture");
         root
+    }
+
+    #[test]
+    fn terminal_commands_keep_the_optional_command_intact() {
+        assert_eq!(terminal_command("terminal"), Some(None));
+        assert_eq!(
+            terminal_command("term cargo test --all"),
+            Some(Some("cargo test --all"))
+        );
+        assert_eq!(terminal_command("theme terminal"), None);
     }
 
     #[test]

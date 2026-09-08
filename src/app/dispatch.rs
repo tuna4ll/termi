@@ -114,10 +114,10 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::Quit => quit(app),
 
         Action::SplitWindow { axis } => {
-            app.windows.split(axis);
+            app.split_window(axis);
         }
         Action::CloseWindow => close_window(app),
-        Action::OnlyWindow => app.windows.close_others(),
+        Action::OnlyWindow => app.close_other_windows(),
         Action::FocusWindow(side) => {
             if let Some(id) = app.windows.neighbour(side) {
                 focus_window(app, id);
@@ -126,11 +126,18 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::CycleWindow => cycle_window(app),
         Action::ResizeWindow { axis, delta } => app.windows.resize(axis, delta),
         Action::EqualiseWindows => app.windows.equalise(),
+        Action::TerminalInput(key) => {
+            if let Err(error) = app.send_terminal_key(key) {
+                app.error(error.to_string());
+            }
+        }
         Action::ClickAt { x, y } => click(app, x, y),
         Action::DragTo { x, y } => drag(app, x, y),
         Action::ScrollAt { x, y, delta } => {
             if let Some(id) = app.windows.at(x, y) {
-                app.scroll_window(id, delta);
+                if !app.is_terminal(id) {
+                    app.scroll_window(id, delta);
+                }
             }
         }
 
@@ -242,7 +249,7 @@ fn repeat_search(app: &mut App, forward: bool) {
 
 fn close_window(app: &mut App) {
     let focus = app.windows.focus();
-    if !app.windows.close(focus) {
+    if !app.close_window(focus) {
         app.info("only one window");
     }
 }
@@ -251,8 +258,8 @@ fn focus_window(app: &mut App, id: WindowId) {
     if id == app.windows.focus() {
         return;
     }
-    enter_mode(app, Mode::Normal);
     app.windows.set_focus(id);
+    app.sync_mode_to_focus();
 }
 
 fn click(app: &mut App, x: u16, y: u16) {
@@ -264,10 +271,16 @@ fn click(app: &mut App, x: u16, y: u16) {
     } else if app.mode.is_visual() {
         enter_mode(app, Mode::Normal);
     }
+    if app.terminal_focused() {
+        return;
+    }
     place_caret(app, x, y, false);
 }
 
 fn drag(app: &mut App, x: u16, y: u16) {
+    if app.terminal_focused() {
+        return;
+    }
     let area = app.window().area;
     let x = x.clamp(area.x, area.right().saturating_sub(1).max(area.x));
     let y = y.clamp(area.y, area.bottom().saturating_sub(1).max(area.y));
@@ -392,7 +405,7 @@ fn enter_mode(app: &mut App, mode: Mode) {
         }
         Mode::Command => app.command_line.clear(),
         Mode::Insert => app.window_mut().collapse_selections(),
-        Mode::Search | Mode::Tree => {}
+        Mode::Search | Mode::Tree | Mode::Terminal => {}
     }
     app.mode = mode;
 }

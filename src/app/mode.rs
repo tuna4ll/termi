@@ -30,6 +30,8 @@ pub enum Mode {
     Search,
     /// The file tree panel has the keyboard.
     Tree,
+    /// A child process running in an embedded terminal has the keyboard.
+    Terminal,
 }
 
 impl Mode {
@@ -44,6 +46,7 @@ impl Mode {
             Self::Command => "COMMAND",
             Self::Search => "SEARCH",
             Self::Tree => "TREE",
+            Self::Terminal => "TERMINAL",
         }
     }
 
