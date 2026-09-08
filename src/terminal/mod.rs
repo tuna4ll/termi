@@ -381,6 +381,7 @@ fn function_key(number: u8) -> &'static [u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn printable_and_control_keys_are_encoded() {
@@ -415,5 +416,29 @@ mod tests {
             encode_key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT), false),
             b"\x1b[1;3A"
         );
+    }
+
+    #[test]
+    fn a_spawned_command_reaches_the_emulated_screen() {
+        #[cfg(unix)]
+        let command = "printf TERMI_PTY_OK";
+        #[cfg(windows)]
+        let command = "echo TERMI_PTY_OK";
+
+        let cwd = std::env::current_dir().expect("the test has a working directory");
+        let terminal = Terminal::spawn(Some(command), &cwd).expect("spawn a terminal command");
+        let deadline = Instant::now() + Duration::from_secs(2);
+
+        loop {
+            let contents = terminal.with_screen(vt100::Screen::contents);
+            if contents.contains("TERMI_PTY_OK") {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "terminal output never reached the screen: {contents:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }
