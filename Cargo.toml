@@ -1,6 +1,6 @@
 [package]
 name = "termi"
-version = "0.1.6"
+version = "0.1.7"
 edition = "2024"
 # Edition 2024 alone needs 1.85, but the code uses let-chains, which only
 # stabilised in 1.88. Claiming 1.85 turns "your toolchain is too old" into a
