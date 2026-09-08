@@ -97,6 +97,13 @@ holds a viewport and its cursors. The same file can therefore be open in two
 windows at once, scrolled to different places, with an edit in one appearing
 immediately in the other and a single undo stack behind both.
 
+**Terminal** — `:terminal` opens the platform shell in a new window below the
+editor; `:terminal <command>` runs one command there instead. It is a real PTY,
+so interactive programs, ANSI colours, alternate screens, resized panes and
+bracketed paste work inside Termi. Terminal input goes straight to the child;
+use `Ctrl+W` followed by the usual window key to move, split, resize or close
+the pane. The mouse wheel moves through 10,000 lines of terminal history.
+
 **Looks** — dark and light themes built in, plus TOML themes that override only
 the slots you care about.
 
@@ -126,12 +133,13 @@ Press `:help` inside the editor for the same list.
 | `Ctrl+W` `h j k l` `w` | move the focus between windows |
 | `Ctrl+W` `c` `o` | close this window / close all the others |
 | `Ctrl+W` `+` `-` `<` `>` `=` | resize windows, or even them up |
+| `:terminal [command]` | open a shell or command in a new terminal window |
 | `Ctrl+S` `Ctrl+Q` | save, quit |
 | `:` | command line |
 
 Commands: `:w [path]` `:q[!]` `:wq` `:e[!] path` `:touch path` `:mkdir path`
 `:bn` `:bp` `:<line>` `:sp` `:vs` `:clo` `:on` `:set <option> [value]`
-`:theme <name>` `:%s/pattern/replacement/g`
+`:theme <name>` `:terminal [command]` `:%s/pattern/replacement/g`
 
 ## Configuration
 
@@ -167,6 +175,7 @@ app/         event loop, state, action dispatch, ex commands
     ├── edit/       changes a buffer's text through a window
     └── command/    ex-command parsing
 
+terminal/  PTY process + ANSI screen model
 config/  theme/  syntax/  search/  undo/  clipboard/  filesystem/
 ```
 
