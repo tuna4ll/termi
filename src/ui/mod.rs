@@ -364,6 +364,9 @@ fn status_bar(app: &App) -> StatusBar<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{Duration, Instant};
+
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer as Surface;
@@ -371,6 +374,7 @@ mod tests {
     use crate::config::Config;
     use crate::editor::buffer::Buffer as TextBuffer;
     use crate::editor::document::Document;
+    use crate::input::Input;
 
     /// An editor holding `text`, with the settings pinned so the frame does not
     /// change with whatever is installed on the machine running the test.
@@ -400,6 +404,43 @@ mod tests {
         (0..surface.area.width)
             .filter_map(|x| surface.cell((x, y)).map(|cell| cell.symbol().to_string()))
             .collect()
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn focused_terminal_receives_and_draws_typed_keys() {
+        let mut app = app("editor");
+        app.open_terminal(Some("cat"))
+            .expect("open a terminal window");
+        assert!(app.terminal_focused());
+
+        let mut input = Input::default();
+        let action = input.handle(
+            KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE),
+            app.mode,
+        );
+        crate::app::dispatch::apply(&mut app, action).expect("dispatch terminal input");
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            let contents = app
+                .terminal(app.windows.focus())
+                .expect("focused terminal")
+                .with_screen(vt100::Screen::contents);
+            if contents.contains('x') {
+                break;
+            }
+            assert!(Instant::now() < deadline, "terminal never echoed the key");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+
+        let surface = render(&mut app, 80, 14);
+        let screen: String = (0..surface.area.height).map(|y| row(&surface, y)).collect();
+        assert!(
+            screen.contains('x'),
+            "terminal key was not drawn: {screen:?}"
+        );
+        assert!(screen.contains("TERMINAL"), "terminal did not own focus");
     }
 
     #[test]

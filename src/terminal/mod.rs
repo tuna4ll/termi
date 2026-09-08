@@ -23,6 +23,11 @@ use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system}
 const INITIAL_ROWS: u16 = 24;
 const INITIAL_COLS: u16 = 80;
 const SCROLLBACK_ROWS: usize = 10_000;
+// vt100's wrapping path needs a previous row and enough columns for one wide
+// glyph. The UI may clip either dimension to one cell, so keep the emulated PTY
+// minimally valid and let the renderer show the visible intersection.
+const MIN_ROWS: u16 = 2;
+const MIN_COLS: u16 = 2;
 
 struct ScreenState {
     parser: vt100::Parser,
@@ -178,8 +183,8 @@ impl Terminal {
     /// Returns an error when the operating-system PTY rejects the resize.
     pub fn resize(&mut self, rows: u16, cols: u16) -> Result<()> {
         let next = PtySize {
-            rows: rows.max(1),
-            cols: cols.max(1),
+            rows: rows.max(MIN_ROWS),
+            cols: cols.max(MIN_COLS),
             pixel_width: 0,
             pixel_height: 0,
         };
@@ -437,6 +442,33 @@ mod tests {
             assert!(
                 Instant::now() < deadline,
                 "terminal output never reached the screen: {contents:?}"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn typed_keys_reach_the_child_process() {
+        let cwd = std::env::current_dir().expect("the test has a working directory");
+        let mut terminal = Terminal::spawn(Some("cat"), &cwd).expect("spawn cat in a terminal");
+        terminal.resize(1, 1).expect("resize the terminal");
+        terminal
+            .send_key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE))
+            .expect("write a key to the terminal");
+        terminal
+            .send_key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE))
+            .expect("write another key to the terminal");
+        let deadline = Instant::now() + Duration::from_secs(2);
+
+        loop {
+            let contents = terminal.with_screen(vt100::Screen::contents);
+            if contents.contains('y') {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "typed key never reached the screen: {contents:?}"
             );
             thread::sleep(Duration::from_millis(10));
         }
