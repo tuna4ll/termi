@@ -364,8 +364,10 @@ fn status_bar(app: &App) -> StatusBar<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
     use std::time::{Duration, Instant};
 
+    #[cfg(unix)]
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -374,6 +376,7 @@ mod tests {
     use crate::config::Config;
     use crate::editor::buffer::Buffer as TextBuffer;
     use crate::editor::document::Document;
+    #[cfg(unix)]
     use crate::input::Input;
 
     /// An editor holding `text`, with the settings pinned so the frame does not
