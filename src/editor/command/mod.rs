@@ -59,4 +59,12 @@ pub enum Command {
     },
     /// `:help` — list the commands.
     Help,
+    /// `:find` — search project files.
+    Find,
+    /// `:buffers` — search open buffers.
+    Buffers,
+    /// `:commands` — search commands.
+    Commands,
+    /// `:themes` — search themes.
+    Themes,
 }

@@ -6,6 +6,7 @@ use super::{Action, Pending, is_ctrl, is_plain};
 use crate::app::mode::Mode;
 use crate::editor::cursor::Motion;
 use crate::editor::window::{Axis, Side};
+use crate::picker::PickerKind;
 
 fn window_prefix(key: KeyEvent, pending: &mut Option<Pending>) -> bool {
     if is_ctrl(key.modifiers) && key.code == KeyCode::Char('w') {
@@ -40,6 +41,7 @@ fn universal(key: KeyEvent) -> Option<Action> {
         },
         KeyCode::Char('e') => Action::Scroll(1),
         KeyCode::Char('b') => Action::ToggleTree,
+        KeyCode::Char('o') => Action::OpenPicker(PickerKind::Files),
         _ => return None,
     })
 }
@@ -395,6 +397,27 @@ pub fn search(key: KeyEvent) -> Action {
         KeyCode::Down => Action::SearchRepeat { forward: true },
         KeyCode::Up => Action::SearchRepeat { forward: false },
         KeyCode::Char(ch) if is_plain(key.modifiers) => Action::SearchInput(ch),
+        _ => Action::None,
+    }
+}
+
+pub fn picker(key: KeyEvent) -> Action {
+    if is_ctrl(key.modifiers) {
+        return match key.code {
+            KeyCode::Char('n') => Action::PickerMove(1),
+            KeyCode::Char('p') => Action::PickerMove(-1),
+            _ => Action::None,
+        };
+    }
+    match key.code {
+        KeyCode::Esc => Action::PickerCancel,
+        KeyCode::Enter => Action::PickerSubmit,
+        KeyCode::Backspace => Action::PickerBackspace,
+        KeyCode::Down => Action::PickerMove(1),
+        KeyCode::Up => Action::PickerMove(-1),
+        KeyCode::PageDown => Action::PickerMove(10),
+        KeyCode::PageUp => Action::PickerMove(-10),
+        KeyCode::Char(ch) if is_plain(key.modifiers) => Action::PickerInput(ch),
         _ => Action::None,
     }
 }

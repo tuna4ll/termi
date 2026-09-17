@@ -11,6 +11,14 @@ use std::path::{Path, PathBuf};
 
 use ignore::WalkBuilder;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PickerKind {
+    Files,
+    Buffers,
+    Commands,
+    Themes,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PickerTarget {
     File(PathBuf),
@@ -66,7 +74,6 @@ impl Picker {
         picker
     }
 
-    #[must_use]
     pub fn matches(&self) -> impl Iterator<Item = &PickerItem> {
         self.matches.iter().map(|index| &self.items[*index])
     }

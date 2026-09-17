@@ -27,6 +27,7 @@ use crate::editor::document::Document;
 use crate::editor::edit::Edit;
 use crate::editor::window::{Window, WindowId, Windows};
 use crate::filesystem::tree::Tree;
+use crate::picker::{Picker, PickerItem, PickerKind, PickerTarget, project_files};
 use crate::search::Search;
 use crate::terminal::Terminal;
 use crate::theme::Theme;
@@ -76,6 +77,9 @@ pub struct App {
     pub tree_visible: bool,
     /// Modal message: title and body. Any key dismisses it.
     pub popup: Option<(String, String)>,
+    /// Active searchable list.
+    pub picker: Option<Picker>,
+    recent_files: Vec<PathBuf>,
     quit: bool,
 }
 
@@ -130,6 +134,8 @@ impl App {
             tree_selected: 0,
             tree_visible: false,
             popup: None,
+            picker: None,
+            recent_files: Vec::new(),
             quit: false,
         }
     }
@@ -347,9 +353,10 @@ impl App {
     pub fn open(&mut self, path: PathBuf) -> Result<()> {
         if let Some(index) = self.index_of(&path) {
             self.windows.focused_mut().show(index);
+            self.record_recent(path);
             return Ok(());
         }
-        let buffer = Buffer::new(Document::open(path)?);
+        let buffer = Buffer::new(Document::open(path.clone())?);
 
         // The initial scratch buffer is a placeholder, not a document the user
         // asked for; replace it rather than accumulating an empty tab.
@@ -363,7 +370,62 @@ impl App {
             let last = self.buffers.len() - 1;
             self.windows.focused_mut().show(last);
         }
+        self.record_recent(path);
         Ok(())
+    }
+
+    pub fn open_picker(&mut self, kind: PickerKind) {
+        let picker = match kind {
+            PickerKind::Files => self.file_picker(),
+            PickerKind::Buffers => self.buffer_picker(),
+            PickerKind::Commands => command_picker(),
+            PickerKind::Themes => theme_picker(),
+        };
+        self.picker = Some(picker);
+        self.mode = Mode::Picker;
+    }
+
+    fn file_picker(&self) -> Picker {
+        let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let items = project_files(&root)
+            .into_iter()
+            .map(|path| {
+                let label = path
+                    .strip_prefix(&root)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .into_owned();
+                let priority = self
+                    .recent_files
+                    .iter()
+                    .position(|recent| recent == &path)
+                    .unwrap_or(usize::MAX);
+                PickerItem::new(label, PickerTarget::File(path)).prioritised(priority)
+            })
+            .collect();
+        Picker::new("files", items)
+    }
+
+    fn buffer_picker(&self) -> Picker {
+        let items = self
+            .buffers
+            .iter()
+            .enumerate()
+            .map(|(index, buffer)| {
+                let label = buffer.document.path().map_or_else(
+                    || buffer.document.display_name().to_string(),
+                    |path| path.display().to_string(),
+                );
+                PickerItem::new(label, PickerTarget::Buffer(index))
+            })
+            .collect();
+        Picker::new("buffers", items)
+    }
+
+    fn record_recent(&mut self, path: PathBuf) {
+        self.recent_files.retain(|recent| recent != &path);
+        self.recent_files.insert(0, path);
+        self.recent_files.truncate(100);
     }
 
     /// Close the focused buffer, keeping at least one open.
@@ -535,4 +597,35 @@ impl App {
         let document = &self.buffers[index].document;
         document.path().is_none() && !document.is_dirty() && document.len_chars() == 0
     }
+}
+
+fn command_picker() -> Picker {
+    let commands = [
+        "find", "buffers", "themes", "help", "write", "quit", "split", "vsplit", "close", "only",
+        "terminal",
+    ];
+    let items = commands
+        .into_iter()
+        .map(|command| PickerItem::new(command, PickerTarget::Command(command.to_string())))
+        .collect();
+    Picker::new("commands", items)
+}
+
+fn theme_picker() -> Picker {
+    let mut names = vec!["dark".to_string(), "light".to_string()];
+    if let Ok(files) = std::fs::read_dir(config::themes_dir()) {
+        names.extend(files.flatten().filter_map(|file| {
+            let path = file.path();
+            (path.extension()? == "toml")
+                .then(|| path.file_stem()?.to_str().map(str::to_string))
+                .flatten()
+        }));
+    }
+    names.sort();
+    names.dedup();
+    let items = names
+        .into_iter()
+        .map(|name| PickerItem::new(name.clone(), PickerTarget::Theme(name)))
+        .collect();
+    Picker::new("themes", items)
 }

@@ -30,6 +30,8 @@ pub enum Mode {
     Search,
     /// The file tree panel has the keyboard.
     Tree,
+    /// A searchable list has the keyboard.
+    Picker,
     /// A child process running in an embedded terminal has the keyboard.
     Terminal,
 }
@@ -46,6 +48,7 @@ impl Mode {
             Self::Command => "COMMAND",
             Self::Search => "SEARCH",
             Self::Tree => "TREE",
+            Self::Picker => "PICKER",
             Self::Terminal => "TERMINAL",
         }
     }
@@ -79,6 +82,9 @@ impl Mode {
     /// bar; every other mode selects a character and uses a block.
     #[must_use]
     pub const fn uses_bar_cursor(self) -> bool {
-        matches!(self, Self::Insert | Self::Command | Self::Search)
+        matches!(
+            self,
+            Self::Insert | Self::Command | Self::Search | Self::Picker
+        )
     }
 }

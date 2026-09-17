@@ -76,6 +76,10 @@ pub fn parse(input: &str) -> Result<Command, String> {
         ),
         "set" => parse_set(rest),
         "help" | "h" => Ok(Command::Help),
+        "find" | "files" => Ok(Command::Find),
+        "buffers" | "ls" => Ok(Command::Buffers),
+        "commands" => Ok(Command::Commands),
+        "themes" => Ok(Command::Themes),
         other => Err(format!("unknown command: {other}")),
     }
 }
@@ -221,6 +225,14 @@ mod tests {
     fn a_bare_number_jumps_to_a_line() {
         assert_eq!(parse("42"), Ok(Command::GotoLine(41)));
         assert_eq!(parse("1"), Ok(Command::GotoLine(0)));
+    }
+
+    #[test]
+    fn picker_commands_select_their_sources() {
+        assert_eq!(parse("find"), Ok(Command::Find));
+        assert_eq!(parse("buffers"), Ok(Command::Buffers));
+        assert_eq!(parse("commands"), Ok(Command::Commands));
+        assert_eq!(parse("themes"), Ok(Command::Themes));
     }
 
     #[test]

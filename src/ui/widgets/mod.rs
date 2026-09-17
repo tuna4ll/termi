@@ -12,6 +12,7 @@
 pub mod command_bar;
 pub mod editor_view;
 pub mod file_tree;
+pub mod picker;
 pub mod popup;
 pub mod search_box;
 pub mod status_bar;
@@ -21,6 +22,7 @@ pub mod terminal_view;
 pub use command_bar::CommandBar;
 pub use editor_view::EditorView;
 pub use file_tree::FileTree;
+pub use picker::PickerView;
 pub use popup::Popup;
 pub use search_box::SearchBox;
 pub use status_bar::StatusBar;

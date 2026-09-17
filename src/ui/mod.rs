@@ -25,8 +25,8 @@ use crate::editor::window::tree::Axis;
 use crate::theme::Theme;
 use crate::ui::layout::Panes;
 use crate::ui::widgets::{
-    CommandBar, EditorView, FileTree, Popup, SearchBox, StatusBar, Tab, TabBar, TerminalStatusBar,
-    TerminalView, editor_view,
+    CommandBar, EditorView, FileTree, PickerView, Popup, SearchBox, StatusBar, Tab, TabBar,
+    TerminalStatusBar, TerminalView, editor_view,
 };
 
 /// Where each part of the interface goes this frame.
@@ -178,6 +178,17 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             },
             frame.area(),
         );
+        return;
+    }
+
+    if let Some(picker) = app.picker.as_ref() {
+        let view = PickerView {
+            picker,
+            theme: &app.theme,
+        };
+        let caret = view.caret_position(frame.area());
+        frame.render_widget(view, frame.area());
+        frame.set_cursor_position(caret);
         return;
     }
 

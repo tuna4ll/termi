@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 use crate::app::mode::Mode;
 use crate::editor::cursor::Motion;
 use crate::editor::window::{Axis, Side};
+use crate::picker::PickerKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pending {
@@ -49,6 +50,12 @@ pub enum Action {
     ClearCursors,
 
     CycleBuffer { forward: bool },
+    OpenPicker(PickerKind),
+    PickerInput(char),
+    PickerBackspace,
+    PickerMove(isize),
+    PickerSubmit,
+    PickerCancel,
 
     SplitWindow { axis: Axis },
     CloseWindow,
@@ -102,6 +109,7 @@ impl Input {
             Mode::Command => keymap::command(key),
             Mode::Search => keymap::search(key),
             Mode::Tree => keymap::tree(key),
+            Mode::Picker => keymap::picker(key),
             Mode::Terminal => keymap::terminal(key, &mut self.pending),
         };
         if matches!(action, Action::EnterMode(_)) {
@@ -187,6 +195,16 @@ mod tests {
         let ctrl_s = KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL);
         assert_eq!(input.handle(ctrl_s, Mode::Insert), Action::Save);
         assert_eq!(input.handle(plain('a'), Mode::Insert), Action::Insert('a'));
+    }
+
+    #[test]
+    fn control_o_opens_the_file_picker() {
+        let mut input = Input::default();
+        let key = KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL);
+        assert_eq!(
+            input.handle(key, Mode::Normal),
+            Action::OpenPicker(PickerKind::Files)
+        );
     }
 
     #[test]

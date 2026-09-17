@@ -7,6 +7,7 @@ use super::state::App;
 use crate::config;
 use crate::editor::command::{Command, parser};
 use crate::editor::cursor::Motion;
+use crate::picker::PickerKind;
 use crate::theme::Theme;
 
 const HELP: &str = "\
@@ -92,6 +93,10 @@ fn execute(app: &mut App, command: Command) {
             whole_file,
         } => substitute(app, &pattern, &replacement, all, whole_file),
         Command::Help => app.show_popup("termi", HELP),
+        Command::Find => app.open_picker(PickerKind::Files),
+        Command::Buffers => app.open_picker(PickerKind::Buffers),
+        Command::Commands => app.open_picker(PickerKind::Commands),
+        Command::Themes => app.open_picker(PickerKind::Themes),
     }
 }
 

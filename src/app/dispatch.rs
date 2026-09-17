@@ -11,6 +11,7 @@ use crate::editor::document::indent;
 use crate::editor::selection::Range;
 use crate::editor::window::WindowId;
 use crate::input::Action;
+use crate::picker::PickerTarget;
 use crate::ui::widgets::editor_view;
 
 pub fn apply(app: &mut App, action: Action) -> Result<()> {
@@ -110,6 +111,24 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         }
 
         Action::CycleBuffer { forward } => app.cycle_buffer(forward),
+        Action::OpenPicker(kind) => app.open_picker(kind),
+        Action::PickerInput(ch) => {
+            if let Some(picker) = app.picker.as_mut() {
+                picker.push(ch);
+            }
+        }
+        Action::PickerBackspace => {
+            if let Some(picker) = app.picker.as_mut() {
+                picker.pop();
+            }
+        }
+        Action::PickerMove(delta) => {
+            if let Some(picker) = app.picker.as_mut() {
+                picker.move_selection(delta);
+            }
+        }
+        Action::PickerSubmit => submit_picker(app),
+        Action::PickerCancel => close_picker(app),
         Action::Save => save(app),
         Action::Quit => quit(app),
 
@@ -412,9 +431,36 @@ fn enter_mode(app: &mut App, mode: Mode) {
         }
         Mode::Command => app.command_line.clear(),
         Mode::Insert => app.window_mut().collapse_selections(),
-        Mode::Search | Mode::Tree | Mode::Terminal => {}
+        Mode::Search | Mode::Tree | Mode::Picker | Mode::Terminal => {}
     }
     app.mode = mode;
+}
+
+fn close_picker(app: &mut App) {
+    app.picker = None;
+    enter_mode(app, Mode::Normal);
+}
+
+fn submit_picker(app: &mut App) {
+    let target = app
+        .picker
+        .as_ref()
+        .and_then(|picker| picker.selected())
+        .map(|item| item.target.clone());
+    close_picker(app);
+    match target {
+        Some(PickerTarget::File(path)) => {
+            if let Err(error) = app.open(path) {
+                app.error(error.to_string());
+            }
+        }
+        Some(PickerTarget::Buffer(index)) if index < app.buffers.len() => {
+            app.windows.focused_mut().show(index);
+        }
+        Some(PickerTarget::Command(command)) => commands::run(app, &command),
+        Some(PickerTarget::Theme(theme)) => commands::run(app, &format!("theme {theme}")),
+        _ => {}
+    }
 }
 
 fn move_cursors(app: &mut App, motion: Motion, extend: bool) {
