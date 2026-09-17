@@ -77,6 +77,8 @@ pub struct App {
     pub tree_visible: bool,
     /// Tree entry awaiting a destination from the command line.
     pub tree_source: Option<PathBuf>,
+    /// Tree entry awaiting permanent deletion.
+    pub pending_delete: Option<PathBuf>,
     /// Modal message: title and body. Any key dismisses it.
     pub popup: Option<(String, String)>,
     /// Active searchable list.
@@ -136,6 +138,7 @@ impl App {
             tree_selected: 0,
             tree_visible: false,
             tree_source: None,
+            pending_delete: None,
             popup: None,
             picker: None,
             recent_files: Vec::new(),
@@ -472,6 +475,35 @@ impl App {
             };
             buffer.document.relocate(path);
             buffer.detect_language();
+        }
+    }
+
+    #[must_use]
+    pub fn has_dirty_under(&self, path: &Path) -> bool {
+        self.buffers.iter().any(|buffer| {
+            buffer.document.is_dirty()
+                && buffer
+                    .document
+                    .path()
+                    .is_some_and(|buffer_path| buffer_path.starts_with(path))
+        })
+    }
+
+    pub fn close_buffers_under(&mut self, path: &Path) {
+        let indexes: Vec<_> = self
+            .buffers
+            .iter()
+            .enumerate()
+            .filter_map(|(index, buffer)| {
+                buffer
+                    .document
+                    .path()
+                    .is_some_and(|buffer_path| buffer_path.starts_with(path))
+                    .then_some(index)
+            })
+            .collect();
+        for index in indexes.into_iter().rev() {
+            self.close_buffer(index);
         }
     }
 

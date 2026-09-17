@@ -81,6 +81,10 @@ pub enum Action {
     TreeRename,
     TreeCopy,
     TreeMovePath,
+    TreeDelete,
+
+    ConfirmDelete,
+    ConfirmCancel,
 
     SearchStart { forward: bool },
     SearchInput(char),
@@ -114,6 +118,7 @@ impl Input {
             Mode::Search => keymap::search(key),
             Mode::Tree => keymap::tree(key),
             Mode::Picker => keymap::picker(key),
+            Mode::Confirm => keymap::confirm(key),
             Mode::Terminal => keymap::terminal(key, &mut self.pending),
         };
         if matches!(action, Action::EnterMode(_)) {

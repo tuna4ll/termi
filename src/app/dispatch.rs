@@ -15,7 +15,12 @@ use crate::picker::PickerTarget;
 use crate::ui::widgets::editor_view;
 
 pub fn apply(app: &mut App, action: Action) -> Result<()> {
-    if app.popup.is_some() && !matches!(action, Action::None) {
+    if app.popup.is_some() && app.mode == Mode::Confirm {
+        if !matches!(&action, Action::ConfirmDelete | Action::ConfirmCancel) {
+            return Ok(());
+        }
+        app.popup = None;
+    } else if app.popup.is_some() && !matches!(action, Action::None) {
         app.popup = None;
         return Ok(());
     }
@@ -182,6 +187,9 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::TreeRename => begin_tree_path(app, "rename", true),
         Action::TreeCopy => begin_tree_path(app, "copy", false),
         Action::TreeMovePath => begin_tree_path(app, "move", false),
+        Action::TreeDelete => begin_tree_delete(app),
+        Action::ConfirmDelete => delete_tree_path(app),
+        Action::ConfirmCancel => cancel_tree_delete(app),
 
         Action::SearchStart { forward } => {
             let origin = origin_offset(app);
@@ -453,6 +461,62 @@ fn begin_tree_path(app: &mut App, command: &str, keep_name: bool) {
     app.command_line = format!("{command} {destination}");
 }
 
+fn begin_tree_delete(app: &mut App) {
+    let Some(path) = app
+        .tree
+        .as_ref()
+        .and_then(|tree| tree.path_at(app.tree_selected))
+        .map(std::path::Path::to_path_buf)
+    else {
+        return;
+    };
+    if app.has_dirty_under(&path) {
+        app.error(format!(
+            "save or close modified files before deleting {}",
+            path.display()
+        ));
+        return;
+    }
+    let kind = if path.is_dir() { "directory" } else { "file" };
+    app.pending_delete = Some(path.clone());
+    app.popup = Some((
+        format!("delete {kind} permanently?"),
+        format!("{}\n\nThis cannot be undone.", path.display()),
+    ));
+    app.mode = Mode::Confirm;
+}
+
+fn cancel_tree_delete(app: &mut App) {
+    app.pending_delete = None;
+    app.mode = if app.tree_visible {
+        Mode::Tree
+    } else {
+        Mode::Normal
+    };
+}
+
+fn delete_tree_path(app: &mut App) {
+    let Some(path) = app.pending_delete.take() else {
+        return cancel_tree_delete(app);
+    };
+    if app.has_dirty_under(&path) {
+        app.error(format!(
+            "save or close modified files before deleting {}",
+            path.display()
+        ));
+        return cancel_tree_delete(app);
+    }
+    match crate::filesystem::delete_path(&path) {
+        Ok(()) => {
+            app.close_buffers_under(&path);
+            app.refresh_tree();
+            app.info(format!("deleted {}", path.display()));
+        }
+        Err(error) => app.error(error.to_string()),
+    }
+    cancel_tree_delete(app);
+}
+
 fn enter_mode(app: &mut App, mode: Mode) {
     if app.mode == mode {
         return;
@@ -470,7 +534,7 @@ fn enter_mode(app: &mut App, mode: Mode) {
         }
         Mode::Command => app.command_line.clear(),
         Mode::Insert => app.window_mut().collapse_selections(),
-        Mode::Search | Mode::Tree | Mode::Picker | Mode::Terminal => {}
+        Mode::Search | Mode::Tree | Mode::Picker | Mode::Confirm | Mode::Terminal => {}
     }
     app.mode = mode;
 }
@@ -1336,5 +1400,67 @@ mod tests {
                 std::path::MAIN_SEPARATOR
             )
         );
+    }
+
+    #[test]
+    fn tree_delete_requires_explicit_confirmation() {
+        let root = std::env::temp_dir().join("termi-dispatch-tree-delete-cancel");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create fixture");
+        let path = root.join("note.txt");
+        std::fs::write(&path, "hello").expect("write fixture");
+        let mut app = app();
+        app.tree = Some(crate::filesystem::tree::Tree::new(root));
+        app.tree_visible = true;
+
+        press(&mut app, Action::TreeDelete);
+        assert_eq!(app.mode, Mode::Confirm);
+        assert!(path.exists());
+
+        press(&mut app, Action::ConfirmCancel);
+        assert_eq!(app.mode, Mode::Tree);
+        assert!(path.exists());
+    }
+
+    #[test]
+    fn confirmed_tree_delete_closes_a_clean_buffer() {
+        let root = std::env::temp_dir().join("termi-dispatch-tree-delete-clean");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create fixture");
+        let path = root.join("note.txt");
+        std::fs::write(&path, "hello").expect("write fixture");
+        let mut app = app();
+        app.open(path.clone()).expect("open fixture");
+        app.tree = Some(crate::filesystem::tree::Tree::new(root));
+        app.tree_visible = true;
+
+        press(&mut app, Action::TreeDelete);
+        press(&mut app, Action::ConfirmDelete);
+
+        assert!(!path.exists());
+        assert_eq!(app.buffer().document.path(), None);
+        assert_eq!(app.mode, Mode::Tree);
+    }
+
+    #[test]
+    fn tree_delete_refuses_a_modified_buffer() {
+        let root = std::env::temp_dir().join("termi-dispatch-tree-delete-dirty");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).expect("create fixture");
+        let path = root.join("note.txt");
+        std::fs::write(&path, "hello").expect("write fixture");
+        let mut app = app();
+        app.open(path.clone()).expect("open fixture");
+        type_text(&mut app, "changed");
+        app.tree = Some(crate::filesystem::tree::Tree::new(root));
+        app.tree_visible = true;
+        app.mode = Mode::Tree;
+
+        press(&mut app, Action::TreeDelete);
+
+        assert!(path.exists());
+        assert_eq!(app.mode, Mode::Tree);
+        assert!(app.status.is_error);
+        assert!(app.status.text.contains("save or close"));
     }
 }

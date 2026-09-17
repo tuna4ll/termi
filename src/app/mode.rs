@@ -32,6 +32,8 @@ pub enum Mode {
     Tree,
     /// A searchable list has the keyboard.
     Picker,
+    /// A destructive action is waiting for an explicit key.
+    Confirm,
     /// A child process running in an embedded terminal has the keyboard.
     Terminal,
 }
@@ -49,6 +51,7 @@ impl Mode {
             Self::Search => "SEARCH",
             Self::Tree => "TREE",
             Self::Picker => "PICKER",
+            Self::Confirm => "CONFIRM",
             Self::Terminal => "TERMINAL",
         }
     }

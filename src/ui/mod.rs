@@ -174,11 +174,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     // The popup is modal, so it is drawn last and hides the caret.
     if let Some((title, body)) = app.popup.as_ref() {
+        let hint = if app.mode == crate::app::mode::Mode::Confirm {
+            "d delete permanently · Esc cancel"
+        } else {
+            "press any key"
+        };
         frame.render_widget(
             Popup {
                 title,
                 body,
-                hint: "press any key",
+                hint,
                 theme: &app.theme,
             },
             frame.area(),

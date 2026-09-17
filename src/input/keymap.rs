@@ -382,6 +382,7 @@ pub fn tree(key: KeyEvent) -> Action {
         KeyCode::Char('r') => Action::TreeRename,
         KeyCode::Char('c') => Action::TreeCopy,
         KeyCode::Char('m') => Action::TreeMovePath,
+        KeyCode::Char('d') | KeyCode::Delete => Action::TreeDelete,
         _ => Action::None,
     }
 }
@@ -422,6 +423,14 @@ pub fn picker(key: KeyEvent) -> Action {
         KeyCode::PageDown => Action::PickerMove(10),
         KeyCode::PageUp => Action::PickerMove(-10),
         KeyCode::Char(ch) if is_plain(key.modifiers) => Action::PickerInput(ch),
+        _ => Action::None,
+    }
+}
+
+pub fn confirm(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char('d') if is_plain(key.modifiers) => Action::ConfirmDelete,
+        KeyCode::Esc | KeyCode::Char('q') => Action::ConfirmCancel,
         _ => Action::None,
     }
 }
