@@ -83,13 +83,14 @@ into a file does not rescan it. A `.diff`, `.patch` or `.rej` file is coloured
 the way a diff wants to be read: added lines green, removed lines red, hunk
 headers and file headers apart from both.
 
-**Files** — multiple buffers with a tab strip, a lazily expanded file tree
-(`Ctrl+B`) that can create files and directories, atomic saves, and a watcher
-that reloads clean buffers when they change on disk and warns rather than
-clobbers when they do not. The same watcher keeps the tree current, so a file
-another program adds or removes appears and disappears without a restart, and
-`Ctrl+B` re-reads the directory as it opens the panel. `:w name.c` names an
-unnamed buffer and highlights it as C from that moment on.
+**Files** — `Ctrl+O` fuzzy-finds project files while respecting `.gitignore`;
+the same picker searches buffers, commands and themes. Multiple buffers have a
+tab strip, and the lazily expanded file tree (`Ctrl+B`) can create, rename,
+copy, move and safely delete entries or reveal hidden files. Atomic saves and a
+watcher reload clean buffers when they change on disk and warn rather than
+clobber modified ones. The watcher also keeps the tree current, and `Ctrl+B`
+re-reads the directory as it opens the panel. `:w name.c` names an unnamed
+buffer and highlights it as C from that moment on.
 
 **Windows** — split the screen as many ways as you like (`Ctrl+W s` / `Ctrl+W
 v`). A buffer holds the text, the undo history and the highlighting; a window
@@ -129,6 +130,9 @@ Press `:help` inside the editor for the same list.
 | `Alt+↑` `Alt+↓` `Esc` | add a cursor above/below, collapse to one |
 | `Ctrl+B` | file tree |
 | `a` `A` (in the tree) | create a file / directory at the selection |
+| `r` `c` `m` (in the tree) | rename / copy / move the selection |
+| `d` `.` (in the tree) | delete with confirmation / toggle hidden files |
+| `Ctrl+O` | fuzzy-find a project file |
 | `Ctrl+N` `Ctrl+P` | next / previous buffer |
 | `Ctrl+W` `s` `v` | split the window across / down |
 | `Ctrl+W` `h j k l` `w` | move the focus between windows |
@@ -140,8 +144,9 @@ Press `:help` inside the editor for the same list.
 | `:` | command line |
 
 Commands: `:w [path]` `:q[!]` `:wq` `:e[!] path` `:touch path` `:mkdir path`
-`:bn` `:bp` `:<line>` `:sp` `:vs` `:clo` `:on` `:set <option> [value]`
-`:theme <name>` `:terminal [command]` `:%s/pattern/replacement/g`
+`:find` `:buffers` `:commands` `:themes` `:bn` `:bp` `:<line>` `:sp` `:vs`
+`:clo` `:on` `:set <option> [value]` `:theme <name>` `:terminal [command]`
+`:%s/pattern/replacement/g`
 
 ## Configuration
 

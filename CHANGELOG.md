@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A reusable fuzzy picker for project files, open buffers, commands and themes.
+  Project discovery respects `.gitignore`, and recently opened files are shown
+  first until a query is entered.
+- The file tree can rename, copy, move and permanently delete entries with an
+  explicit confirmation. It can also toggle hidden files, and newly created
+  files open immediately.
+
 ## [0.1.7] - 2026-09-09
 
 ### Added
