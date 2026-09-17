@@ -15,6 +15,7 @@ mod config;
 mod editor;
 mod filesystem;
 mod input;
+mod picker;
 mod renderer;
 mod search;
 mod syntax;

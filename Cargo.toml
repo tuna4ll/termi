@@ -37,6 +37,7 @@ dirs = "6"
 # it) — an editor only ever puts text on the clipboard.
 arboard = { version = "3.6", default-features = false }
 notify = "8"
+ignore = "0.4"
 
 # Terminal cell width for CJK / wide graphemes.
 unicode-width = "0.2"
