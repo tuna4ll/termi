@@ -116,6 +116,15 @@ fn create_path(app: &mut App, path: PathBuf, directory: bool) {
             }
             let kind = if directory { "directory" } else { "file" };
             app.info(format!("created {kind} {}", path.display()));
+            if !directory {
+                if let Err(error) = app.open(path) {
+                    app.error(error.to_string());
+                    return;
+                }
+                app.tree_visible = false;
+                app.mode = Mode::Normal;
+                return;
+            }
         }
         Err(error) => app.error(error.to_string()),
     }
@@ -326,5 +335,17 @@ mod tests {
 
         run(&mut app, &format!("w {}", root.join("a.py").display()));
         assert_eq!(app.buffer().syntax.language_name(), "python");
+    }
+
+    #[test]
+    fn a_created_file_opens_immediately() {
+        let path = fixture("create-opens").join("notes.txt");
+        let mut app = app();
+
+        run(&mut app, &format!("touch {}", path.display()));
+
+        assert_eq!(app.buffer().document.path(), Some(path.as_path()));
+        assert!(!app.tree_visible);
+        assert_eq!(app.mode, Mode::Normal);
     }
 }
