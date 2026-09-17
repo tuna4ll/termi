@@ -75,6 +75,8 @@ pub struct App {
     pub tree_selected: usize,
     /// Whether the file tree panel is drawn.
     pub tree_visible: bool,
+    /// Tree entry awaiting a destination from the command line.
+    pub tree_source: Option<PathBuf>,
     /// Modal message: title and body. Any key dismisses it.
     pub popup: Option<(String, String)>,
     /// Active searchable list.
@@ -133,6 +135,7 @@ impl App {
             tree: None,
             tree_selected: 0,
             tree_visible: false,
+            tree_source: None,
             popup: None,
             picker: None,
             recent_files: Vec::new(),
@@ -434,6 +437,10 @@ impl App {
     /// positions in the buffer list, so closing one renumbers the rest.
     pub fn close_active(&mut self) {
         let index = self.windows.focused().buffer;
+        self.close_buffer(index);
+    }
+
+    fn close_buffer(&mut self, index: BufferId) {
         if self.buffers.len() == 1 {
             self.buffers[0] = Buffer::empty();
             for (_, window) in self.windows.iter_mut() {
@@ -447,6 +454,24 @@ impl App {
         let fallback = index.min(self.buffers.len() - 1);
         for (_, window) in self.windows.iter_mut() {
             window.buffer_removed(index, fallback);
+        }
+    }
+
+    pub fn relocate_buffers(&mut self, source: &Path, destination: &Path) {
+        for buffer in &mut self.buffers {
+            let Some(path) = buffer.document.path() else {
+                continue;
+            };
+            let Ok(relative) = path.strip_prefix(source) else {
+                continue;
+            };
+            let path = if relative.as_os_str().is_empty() {
+                destination.to_path_buf()
+            } else {
+                destination.join(relative)
+            };
+            buffer.document.relocate(path);
+            buffer.detect_language();
         }
     }
 

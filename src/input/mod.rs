@@ -78,6 +78,9 @@ pub enum Action {
     TreeActivate,
     TreeCreate { directory: bool },
     TreeToggleHidden,
+    TreeRename,
+    TreeCopy,
+    TreeMovePath,
 
     SearchStart { forward: bool },
     SearchInput(char),

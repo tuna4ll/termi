@@ -379,6 +379,9 @@ pub fn tree(key: KeyEvent) -> Action {
         KeyCode::Char('a') => Action::TreeCreate { directory: false },
         KeyCode::Char('A') => Action::TreeCreate { directory: true },
         KeyCode::Char('.') => Action::TreeToggleHidden,
+        KeyCode::Char('r') => Action::TreeRename,
+        KeyCode::Char('c') => Action::TreeCopy,
+        KeyCode::Char('m') => Action::TreeMovePath,
         _ => Action::None,
     }
 }

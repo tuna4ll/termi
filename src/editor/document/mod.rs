@@ -129,6 +129,10 @@ impl Document {
             .and_then(std::ffi::OsStr::to_str)
             .unwrap_or("[No Name]")
     }
+
+    pub fn relocate(&mut self, path: PathBuf) {
+        self.path = Some(path);
+    }
 }
 
 /// Disk I/O.

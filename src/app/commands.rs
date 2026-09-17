@@ -81,6 +81,9 @@ fn execute(app: &mut App, command: Command) {
         Command::Edit { path, force } => edit(app, path, force),
         Command::CreateFile(path) => create_path(app, path, false),
         Command::CreateDirectory(path) => create_path(app, path, true),
+        Command::Rename(path) => move_tree_path(app, path, "renamed"),
+        Command::Copy(path) => copy_tree_path(app, path),
+        Command::Move(path) => move_tree_path(app, path, "moved"),
         Command::Reload => reload(app),
         Command::GotoLine(line) => app.move_cursors(Motion::ToLine(line), false, false),
         Command::Set { key, value } => set_option(app, &key, &value),
@@ -97,6 +100,44 @@ fn execute(app: &mut App, command: Command) {
         Command::Buffers => app.open_picker(PickerKind::Buffers),
         Command::Commands => app.open_picker(PickerKind::Commands),
         Command::Themes => app.open_picker(PickerKind::Themes),
+    }
+}
+
+fn move_tree_path(app: &mut App, destination: PathBuf, verb: &str) {
+    let Some(source) = app.tree_source.clone() else {
+        return app.error("select a tree entry first");
+    };
+    match crate::filesystem::move_path(&source, &destination) {
+        Ok(()) => {
+            app.relocate_buffers(&source, &destination);
+            reveal_tree_path(app, &destination);
+            app.info(format!("{verb} {}", destination.display()));
+        }
+        Err(error) => app.error(error.to_string()),
+    }
+}
+
+fn copy_tree_path(app: &mut App, destination: PathBuf) {
+    let Some(source) = app.tree_source.clone() else {
+        return app.error("select a tree entry first");
+    };
+    match crate::filesystem::copy_path(&source, &destination) {
+        Ok(()) => {
+            reveal_tree_path(app, &destination);
+            app.info(format!("copied {}", destination.display()));
+        }
+        Err(error) => app.error(error.to_string()),
+    }
+}
+
+fn reveal_tree_path(app: &mut App, path: &std::path::Path) {
+    if let Some(tree) = app.tree.as_mut()
+        && let Some(index) = tree.reveal(path)
+    {
+        app.tree_selected = index;
+    }
+    if app.tree_visible {
+        app.mode = Mode::Tree;
     }
 }
 
@@ -347,5 +388,41 @@ mod tests {
         assert_eq!(app.buffer().document.path(), Some(path.as_path()));
         assert!(!app.tree_visible);
         assert_eq!(app.mode, Mode::Normal);
+    }
+
+    #[test]
+    fn renaming_updates_an_open_buffer_path() {
+        let root = fixture("rename-buffer");
+        let source = root.join("old.rs");
+        let destination = root.join("new.py");
+        std::fs::write(&source, "print('hi')").expect("write fixture");
+        let mut app = app();
+        app.open(source.clone()).expect("open fixture");
+        app.tree_source = Some(source.clone());
+
+        run(&mut app, &format!("rename {}", destination.display()));
+
+        assert!(!source.exists());
+        assert!(destination.exists());
+        assert_eq!(app.buffer().document.path(), Some(destination.as_path()));
+        assert_eq!(app.buffer().syntax.language_name(), "python");
+    }
+
+    #[test]
+    fn copying_keeps_the_source_and_creates_the_destination() {
+        let root = fixture("copy-entry");
+        let source = root.join("source.txt");
+        let destination = root.join("copy.txt");
+        std::fs::write(&source, "hello").expect("write fixture");
+        let mut app = app();
+        app.tree_source = Some(source.clone());
+
+        run(&mut app, &format!("copy {}", destination.display()));
+
+        assert!(source.exists());
+        assert_eq!(
+            std::fs::read_to_string(destination).expect("read copy"),
+            "hello"
+        );
     }
 }

@@ -179,6 +179,9 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
                     .min(tree.entries().len().saturating_sub(1));
             }
         }
+        Action::TreeRename => begin_tree_path(app, "rename", true),
+        Action::TreeCopy => begin_tree_path(app, "copy", false),
+        Action::TreeMovePath => begin_tree_path(app, "move", false),
 
         Action::SearchStart { forward } => {
             let origin = origin_offset(app);
@@ -218,12 +221,14 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         }
         Action::CommandCancel => {
             app.command_line.clear();
+            app.tree_source = None;
             enter_mode(app, Mode::Normal);
         }
         Action::CommandSubmit => {
             let line = std::mem::take(&mut app.command_line);
             enter_mode(app, Mode::Normal);
             commands::run(app, &line);
+            app.tree_source = None;
         }
     }
     Ok(())
@@ -420,6 +425,32 @@ fn begin_tree_creation(app: &mut App, directory: bool) {
 
     enter_mode(app, Mode::Command);
     app.command_line = format!("{command} {prefix}");
+}
+
+fn begin_tree_path(app: &mut App, command: &str, keep_name: bool) {
+    let Some(path) = app
+        .tree
+        .as_ref()
+        .and_then(|tree| tree.path_at(app.tree_selected))
+        .map(std::path::Path::to_path_buf)
+    else {
+        return;
+    };
+    let destination = if keep_name {
+        path.clone()
+    } else {
+        path.parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_default()
+    };
+    app.tree_source = Some(path);
+    enter_mode(app, Mode::Command);
+    let separator = std::path::MAIN_SEPARATOR;
+    let mut destination = destination.as_os_str().to_string_lossy().into_owned();
+    if !keep_name && !destination.ends_with(separator) {
+        destination.push(separator);
+    }
+    app.command_line = format!("{command} {destination}");
 }
 
 fn enter_mode(app: &mut App, mode: Mode) {

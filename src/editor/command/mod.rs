@@ -36,6 +36,12 @@ pub enum Command {
     CreateFile(PathBuf),
     /// `:mkdir path` — create one directory.
     CreateDirectory(PathBuf),
+    /// Rename the selected tree entry to this path.
+    Rename(PathBuf),
+    /// Copy the selected tree entry to this path.
+    Copy(PathBuf),
+    /// Move the selected tree entry to this path.
+    Move(PathBuf),
     /// `:e!` with no path — reload the current file from disk.
     Reload,
     /// `:42` — jump to a line.

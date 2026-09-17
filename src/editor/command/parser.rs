@@ -58,6 +58,9 @@ pub fn parse(input: &str) -> Result<Command, String> {
         },
         "touch" => required_path(argument, "touch").map(Command::CreateFile),
         "mkdir" => required_path(argument, "mkdir").map(Command::CreateDirectory),
+        "rename" => required_path(argument, "rename").map(Command::Rename),
+        "copy" => required_path(argument, "copy").map(Command::Copy),
+        "move" => required_path(argument, "move").map(Command::Move),
         "bn" | "bnext" => Ok(Command::CycleBuffer { forward: true }),
         "bp" | "bprev" => Ok(Command::CycleBuffer { forward: false }),
         // vi names these after the line the split runs along, not after the way
@@ -193,6 +196,22 @@ mod tests {
         );
         assert_eq!(parse("touch"), Err("usage: :touch <path>".into()));
         assert_eq!(parse("mkdir"), Err("usage: :mkdir <path>".into()));
+    }
+
+    #[test]
+    fn tree_path_commands_keep_spaces_in_the_destination() {
+        assert_eq!(
+            parse("rename src/new name.rs"),
+            Ok(Command::Rename(PathBuf::from("src/new name.rs")))
+        );
+        assert_eq!(
+            parse("copy backup folder"),
+            Ok(Command::Copy(PathBuf::from("backup folder")))
+        );
+        assert_eq!(
+            parse("move archive/file.rs"),
+            Ok(Command::Move(PathBuf::from("archive/file.rs")))
+        );
     }
 
     #[test]
