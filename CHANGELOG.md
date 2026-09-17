@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-09-17
+
 ### Added
 
 - A reusable fuzzy picker for project files, open buffers, commands and themes.
@@ -189,7 +191,8 @@ First release.
   slots they name.
 - **Configuration** — TOML, with every key optional and unknown keys reported.
 
-[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.1.7...HEAD
+[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.1.8...HEAD
+[0.1.8]: https://github.com/tuna4ll/termi/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/tuna4ll/termi/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/tuna4ll/termi/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/tuna4ll/termi/compare/v0.1.4...v0.1.5
