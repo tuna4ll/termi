@@ -114,17 +114,22 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 
     if let (Some(area), Some(tree)) = (regions.tree, app.tree.as_ref()) {
-        let title = tree
+        let name = tree
             .root()
             .file_name()
             .and_then(std::ffi::OsStr::to_str)
             .unwrap_or("files");
+        let title = if tree.shows_hidden() {
+            format!("{name} · hidden")
+        } else {
+            name.to_string()
+        };
         frame.render_widget(
             FileTree {
                 entries: tree.entries(),
                 selected: app.tree_selected,
                 focused: app.mode == crate::app::mode::Mode::Tree,
-                title,
+                title: &title,
                 theme: &app.theme,
             },
             area,

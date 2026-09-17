@@ -171,6 +171,14 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
         Action::TreeMove(delta) => move_tree_selection(app, delta),
         Action::TreeActivate => activate_tree_entry(app),
         Action::TreeCreate { directory } => begin_tree_creation(app, directory),
+        Action::TreeToggleHidden => {
+            if let Some(tree) = app.tree.as_mut() {
+                tree.toggle_hidden();
+                app.tree_selected = app
+                    .tree_selected
+                    .min(tree.entries().len().saturating_sub(1));
+            }
+        }
 
         Action::SearchStart { forward } => {
             let origin = origin_offset(app);

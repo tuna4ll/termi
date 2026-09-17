@@ -33,6 +33,7 @@ pub struct Tree {
     root: PathBuf,
     entries: Vec<Entry>,
     expanded: HashSet<PathBuf>,
+    show_hidden: bool,
 }
 
 impl Tree {
@@ -43,6 +44,7 @@ impl Tree {
             root,
             entries: Vec::new(),
             expanded: HashSet::new(),
+            show_hidden: false,
         };
         tree.expanded.insert(tree.root.clone());
         tree.refresh();
@@ -59,6 +61,16 @@ impl Tree {
     #[must_use]
     pub fn entries(&self) -> &[Entry] {
         &self.entries
+    }
+
+    #[must_use]
+    pub const fn shows_hidden(&self) -> bool {
+        self.show_hidden
+    }
+
+    pub fn toggle_hidden(&mut self) {
+        self.show_hidden = !self.show_hidden;
+        self.refresh();
     }
 
     /// Path shown on row `index`, if there is one.
@@ -169,7 +181,7 @@ impl Tree {
                 let name = path.file_name()?.to_str()?.to_string();
                 // Dotfiles are hidden; they are rarely what someone is browsing
                 // for and they dominate a project root.
-                if name.starts_with('.') {
+                if !self.show_hidden && name.starts_with('.') {
                     return None;
                 }
                 let is_dir = item.file_type().is_ok_and(|kind| kind.is_dir());
@@ -227,6 +239,15 @@ mod tests {
     fn hidden_entries_are_skipped() {
         let tree = Tree::new(fixture("hidden"));
         assert!(tree.entries().iter().all(|e| e.name != ".hidden"));
+    }
+
+    #[test]
+    fn hidden_entries_can_be_shown() {
+        let mut tree = Tree::new(fixture("show-hidden"));
+        tree.toggle_hidden();
+
+        assert!(tree.shows_hidden());
+        assert!(tree.entries().iter().any(|entry| entry.name == ".hidden"));
     }
 
     #[test]

@@ -77,6 +77,7 @@ pub enum Action {
     TreeMove(isize),
     TreeActivate,
     TreeCreate { directory: bool },
+    TreeToggleHidden,
 
     SearchStart { forward: bool },
     SearchInput(char),
