@@ -65,6 +65,9 @@ pub fn copy_path(source: &Path, destination: &Path) -> Result<()> {
     if destination.exists() {
         bail!("{} already exists", destination.display());
     }
+    if source.is_dir() && destination.starts_with(source) {
+        bail!("cannot copy a directory inside itself");
+    }
     if source.is_dir() {
         copy_directory(source, destination)
     } else {
@@ -204,6 +207,16 @@ mod tests {
             fs::read_to_string(destination.join("note.txt")).expect("read copy"),
             "hello"
         );
+    }
+
+    #[test]
+    fn refuses_to_copy_a_directory_inside_itself() {
+        let root = fixture("copy-inside-itself");
+        let source = root.join("source");
+        fs::create_dir(&source).expect("create fixture");
+
+        assert!(copy_path(&source, &source.join("nested")).is_err());
+        assert!(!source.join("nested").exists());
     }
 
     #[test]

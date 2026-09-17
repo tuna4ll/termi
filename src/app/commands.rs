@@ -22,15 +22,17 @@ EDIT      x delete    dd line     yy yank    p paste    u undo
           Ctrl+Backspace / Ctrl+Del delete a word or a run of blanks
 CLIPBOARD Ctrl+C copy    Ctrl+X cut    Ctrl+V paste
 SEARCH    / next      ? previous      n / N repeat
-FILES     Ctrl+B tree     a file / A directory        Ctrl+S save
+FILES     Ctrl+O find     Ctrl+B tree                  Ctrl+S save
           Ctrl+N / Ctrl+P buffers
+TREE      a file    A directory    r rename    c copy    m move
+          d delete  . hidden files
 WINDOWS   Ctrl+W then     s / v split     c close     o only      t terminal
                           h j k l focus   w next      = even
                           + - taller      < > wider
 TERMINAL  :terminal [command]        Ctrl+W t opens another terminal
 
 COMMANDS  :w [path]  :q[!]  :wq  :e[!] path  :touch path  :mkdir path
-          :bn  :bp
+          :find  :buffers  :commands  :themes  :bn  :bp
           :sp  :vs  :clo  :on
           :set <option> [value]     :theme <name>     :<line>
           :%s/pattern/replacement/g";
@@ -115,6 +117,7 @@ fn move_tree_path(app: &mut App, destination: PathBuf, verb: &str) {
         }
         Err(error) => app.error(error.to_string()),
     }
+    restore_tree_focus(app);
 }
 
 fn copy_tree_path(app: &mut App, destination: PathBuf) {
@@ -128,6 +131,7 @@ fn copy_tree_path(app: &mut App, destination: PathBuf) {
         }
         Err(error) => app.error(error.to_string()),
     }
+    restore_tree_focus(app);
 }
 
 fn reveal_tree_path(app: &mut App, path: &std::path::Path) {
@@ -136,6 +140,9 @@ fn reveal_tree_path(app: &mut App, path: &std::path::Path) {
     {
         app.tree_selected = index;
     }
+}
+
+fn restore_tree_focus(app: &mut App) {
     if app.tree_visible {
         app.mode = Mode::Tree;
     }

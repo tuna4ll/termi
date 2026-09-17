@@ -24,7 +24,11 @@ impl PickerView<'_> {
     #[must_use]
     pub fn area(&self, outer: Rect) -> Rect {
         let width = (outer.width * 4 / 5).clamp(20, 90).min(outer.width);
-        let height = outer.height.saturating_sub(2).clamp(5, 18);
+        let height = outer
+            .height
+            .saturating_sub(2)
+            .clamp(5, 18)
+            .min(outer.height);
         Rect {
             x: outer.x + (outer.width.saturating_sub(width)) / 2,
             y: outer.y + 1.min(outer.height.saturating_sub(height)),
@@ -38,13 +42,17 @@ impl PickerView<'_> {
         let area = self.area(outer);
         let query_width = self.picker.query.chars().count();
         let offset = u16::try_from(query_width).unwrap_or(u16::MAX);
-        (
-            area.x
-                .saturating_add(3)
-                .saturating_add(offset)
-                .min(area.right().saturating_sub(2)),
-            area.y + 1,
-        )
+        let x = area
+            .x
+            .saturating_add(3)
+            .saturating_add(offset)
+            .min(area.right().saturating_sub(1))
+            .max(area.x);
+        let y = area
+            .y
+            .saturating_add(1)
+            .min(area.bottom().saturating_sub(1));
+        (x, y)
     }
 }
 
@@ -94,7 +102,7 @@ impl Widget for PickerView<'_> {
             );
         }
 
-        let offset = if self.picker.selected < list_height {
+        let offset = if list_height == 0 || self.picker.selected < list_height {
             0
         } else {
             self.picker.selected - list_height + 1

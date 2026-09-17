@@ -535,4 +535,14 @@ mod tests {
         render(&mut app, 4, 2);
         render(&mut app, 1, 1);
     }
+
+    #[test]
+    fn a_picker_still_draws_on_a_small_terminal() {
+        let mut app = app("alpha");
+        app.picker = Some(crate::picker::Picker::new("files", Vec::new()));
+        app.mode = crate::app::mode::Mode::Picker;
+
+        render(&mut app, 4, 2);
+        render(&mut app, 1, 1);
+    }
 }
