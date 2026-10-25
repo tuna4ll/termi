@@ -22,6 +22,13 @@ pub enum Command {
     Write(Option<PathBuf>),
     /// `:q[!]` — close the window, then the buffer, then the editor.
     Quit { force: bool },
+    /// `:wa` — write every modified buffer that has a name.
+    WriteAll,
+    /// `:qa[!]` — leave the editor, refusing while anything is unsaved unless
+    /// forced.
+    QuitAll { force: bool },
+    /// `:wqa` / `:xa` — write every modified buffer, then leave.
+    WriteQuitAll,
     /// `:sp[lit]` / `:vs[plit]` — divide the focused window in two.
     Split { axis: Axis },
     /// `:clo[se]` — close the focused window, keeping the buffer open.

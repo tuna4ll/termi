@@ -158,8 +158,7 @@ fn handle_external_changes(app: &mut App, changed: Vec<PathBuf>) {
                      :w to overwrite the file on disk."
                 ),
             );
-        } else if app.buffers[index].document.reload().is_ok() {
-            app.buffers[index].detect_language();
+        } else if app.buffers[index].reload().is_ok() {
             app.clamp_windows_on(index);
             let name = app.buffers[index].document.display_name().to_string();
             app.info(format!("{name} reloaded from disk"));

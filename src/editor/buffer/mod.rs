@@ -11,6 +11,8 @@
 //!
 //! **Public API:** [`Buffer`], [`BufferId`].
 
+use anyhow::Result;
+
 use crate::editor::document::Document;
 use crate::syntax::{self, HighlightCache};
 use crate::undo::History;
@@ -56,6 +58,21 @@ impl Buffer {
     pub fn detect_language(&mut self) {
         self.syntax
             .set_language(self.document.path().and_then(syntax::detect));
+    }
+
+    /// Re-read the file from disk, discarding unsaved changes.
+    ///
+    /// The history goes with them: every recorded change describes offsets in
+    /// the text that was just thrown away, and replaying one against the new
+    /// text would quietly corrupt it.
+    ///
+    /// # Errors
+    /// Returns an error, leaving the buffer untouched, if the file cannot be read.
+    pub fn reload(&mut self) -> Result<()> {
+        self.document.reload()?;
+        self.history = History::default();
+        self.detect_language();
+        Ok(())
     }
 
     /// Mark every line after `line` as needing its syntax state recomputed.

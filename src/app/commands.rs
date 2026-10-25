@@ -31,7 +31,7 @@ WINDOWS   Ctrl+W then     s / v split     c close     o only      t terminal
                           + - taller      < > wider
 TERMINAL  :terminal [command]        Ctrl+W t opens another terminal
 
-COMMANDS  :w [path]  :q[!]  :wq  :e[!] path  :touch path  :mkdir path
+COMMANDS  :w [path]  :q[!]  :wq  :wa  :qa[!]  :wqa  :e[!] path  :touch path  :mkdir path
           :find  :buffers  :commands  :themes  :bn  :bp
           :sp  :vs  :clo  :on
           :set <option> [value]     :theme <name>     :<line>
@@ -69,6 +69,15 @@ fn execute(app: &mut App, command: Command) {
             write(app, None);
             if !app.status.is_error {
                 quit(app, force);
+            }
+        }
+        Command::WriteAll => {
+            write_all(app);
+        }
+        Command::QuitAll { force } => quit_all(app, force),
+        Command::WriteQuitAll => {
+            if write_all(app) {
+                quit_all(app, false);
             }
         }
         Command::Split { axis } => {
@@ -206,6 +215,54 @@ fn write(app: &mut App, path: Option<PathBuf>) {
     }
 }
 
+/// Write every modified buffer, returning whether all of them made it.
+///
+/// One failure does not stop the rest: a read-only file among ten should not
+/// cost the user the other nine.
+fn write_all(app: &mut App) -> bool {
+    let trim = app.config.trim_trailing_whitespace;
+    let mut written = 0;
+    let mut failures = Vec::new();
+    for buffer in &mut app.buffers {
+        if !buffer.document.is_dirty() {
+            continue;
+        }
+        if buffer.document.path().is_none() {
+            failures.push(format!(
+                "{} has no file name",
+                buffer.document.display_name()
+            ));
+            continue;
+        }
+        if trim {
+            let mut window = crate::editor::window::Window::new(0);
+            crate::editor::edit::Edit::new(buffer, &mut window).trim_trailing_whitespace();
+        }
+        match buffer.document.save() {
+            Ok(()) => written += 1,
+            Err(error) => failures.push(error.to_string()),
+        }
+    }
+    if failures.is_empty() {
+        app.info(format!(
+            "wrote {written} file{}",
+            if written == 1 { "" } else { "s" }
+        ));
+        true
+    } else {
+        app.error(failures.join("; "));
+        false
+    }
+}
+
+fn quit_all(app: &mut App, force: bool) {
+    if !force && let Some(message) = app.unsaved_message() {
+        app.error(message);
+        return;
+    }
+    app.quit();
+}
+
 fn quit(app: &mut App, force: bool) {
     if app.windows.count() > 1 {
         app.close_window(app.windows.focus());
@@ -237,7 +294,7 @@ fn edit(app: &mut App, path: PathBuf, force: bool) {
 }
 
 fn reload(app: &mut App) {
-    match app.buffer_mut().document.reload() {
+    match app.buffer_mut().reload() {
         Ok(()) => {
             app.window_mut().clear_secondary_cursors();
             app.clamp_cursors(false);
@@ -359,6 +416,62 @@ mod tests {
             Some(Some("cargo test --all"))
         );
         assert_eq!(terminal_command("theme terminal"), None);
+    }
+
+    #[test]
+    fn undo_after_a_reload_does_not_replay_edits_into_the_new_text() {
+        let path = fixture("reload-forgets-history").join("notes.txt");
+        std::fs::write(&path, "one\n").expect("write fixture");
+        let mut app = app();
+        app.open(path.clone()).expect("open fixture");
+        app.edit().insert_text("zero ");
+        run(&mut app, "w");
+
+        std::fs::write(&path, "something else entirely\n").expect("rewrite fixture");
+        run(&mut app, "e!");
+        assert!(!app.edit().undo(), "the old history must be gone");
+        assert_eq!(
+            app.buffer().document.text().to_string(),
+            "something else entirely\n"
+        );
+    }
+
+    #[test]
+    fn quit_all_names_the_unsaved_files() {
+        let root = fixture("quit-all-names");
+        let mut app = app();
+        app.open(root.join("a.txt")).expect("open a");
+        app.edit().insert_text("x");
+        app.open(root.join("b.txt")).expect("open b");
+
+        run(&mut app, "qa");
+        assert!(app.status.is_error);
+        assert!(app.status.text.contains("a.txt"), "{}", app.status.text);
+        assert!(!app.status.text.contains("b.txt"));
+        assert!(!app.should_quit());
+
+        run(&mut app, "qa!");
+        assert!(app.should_quit());
+    }
+
+    #[test]
+    fn write_all_saves_every_modified_buffer() {
+        let root = fixture("write-all");
+        let mut app = app();
+        for name in ["a.txt", "b.txt"] {
+            app.open(root.join(name)).expect("open");
+            app.edit().insert_text(name);
+        }
+        run(&mut app, "wa");
+        assert!(!app.status.is_error, "{}", app.status.text);
+        assert_eq!(
+            std::fs::read_to_string(root.join("a.txt")).unwrap(),
+            "a.txt"
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("b.txt")).unwrap(),
+            "b.txt"
+        );
     }
 
     #[test]

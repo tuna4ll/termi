@@ -46,6 +46,9 @@ pub fn parse(input: &str) -> Result<Command, String> {
         "w" | "write" => Ok(Command::Write(argument.map(PathBuf::from))),
         "q" | "quit" => Ok(Command::Quit { force }),
         "wq" | "x" => Ok(Command::WriteQuit { force }),
+        "wa" | "wall" => Ok(Command::WriteAll),
+        "qa" | "qall" | "quitall" => Ok(Command::QuitAll { force }),
+        "wqa" | "wqall" | "xa" | "xall" => Ok(Command::WriteQuitAll),
         "e" | "edit" => match argument {
             Some(path) => Ok(Command::Edit {
                 path: PathBuf::from(path),
@@ -170,6 +173,15 @@ mod tests {
             parse("w  out.rs"),
             Ok(Command::Write(Some(PathBuf::from("out.rs"))))
         );
+    }
+
+    #[test]
+    fn the_all_buffer_variants() {
+        assert_eq!(parse("wa"), Ok(Command::WriteAll));
+        assert_eq!(parse("qa"), Ok(Command::QuitAll { force: false }));
+        assert_eq!(parse("qa!"), Ok(Command::QuitAll { force: true }));
+        assert_eq!(parse("xa"), Ok(Command::WriteQuitAll));
+        assert_eq!(parse("wqa"), Ok(Command::WriteQuitAll));
     }
 
     #[test]

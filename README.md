@@ -143,7 +143,7 @@ Press `:help` inside the editor for the same list.
 | `Ctrl+S` `Ctrl+Q` | save, quit |
 | `:` | command line |
 
-Commands: `:w [path]` `:q[!]` `:wq` `:e[!] path` `:touch path` `:mkdir path`
+Commands: `:w [path]` `:q[!]` `:wq` `:wa` `:qa[!]` `:wqa` `:e[!] path` `:touch path` `:mkdir path`
 `:find` `:buffers` `:commands` `:themes` `:bn` `:bp` `:<line>` `:sp` `:vs`
 `:clo` `:on` `:set <option> [value]` `:theme <name>` `:terminal [command]`
 `:%s/pattern/replacement/g`

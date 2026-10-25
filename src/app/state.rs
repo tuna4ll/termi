@@ -533,10 +533,32 @@ impl App {
             && self.window().cursors().iter().any(Cursor::has_selection)
     }
 
-    /// Whether any buffer has unsaved changes.
+    /// What to tell the user when unsaved work blocks quitting, naming the
+    /// files so they know which ones to look at; `None` when nothing is dirty.
     #[must_use]
-    pub fn has_unsaved_changes(&self) -> bool {
-        self.buffers.iter().any(|b| b.document.is_dirty())
+    pub fn unsaved_message(&self) -> Option<String> {
+        let names: Vec<&str> = self
+            .buffers
+            .iter()
+            .filter(|buffer| buffer.document.is_dirty())
+            .map(|buffer| buffer.document.display_name())
+            .collect();
+        if names.is_empty() {
+            return None;
+        }
+        const SHOWN: usize = 3;
+        let mut list = names
+            .iter()
+            .take(SHOWN)
+            .copied()
+            .collect::<Vec<_>>()
+            .join(", ");
+        if names.len() > SHOWN {
+            list.push_str(&format!(" and {} more", names.len() - SHOWN));
+        }
+        Some(format!(
+            "unsaved changes in {list} — :wa to write, :qa! to discard"
+        ))
     }
 
     /// Scroll one window, dragging its caret along only far enough to keep it

@@ -702,10 +702,9 @@ fn save(app: &mut App) {
 }
 
 fn quit(app: &mut App) {
-    if app.has_unsaved_changes() {
-        app.error("unsaved changes — use :q! to discard them");
-    } else {
-        app.quit();
+    match app.unsaved_message() {
+        Some(message) => app.error(message),
+        None => app.quit(),
     }
 }
 
