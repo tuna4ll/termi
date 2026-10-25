@@ -1,20 +1,158 @@
 //! The single `match` from an `Action` to an effect on the application.
 //! Dispatch owns edit policy; the mechanics live in the editor layer.
 
+mod motion;
+mod operator;
+#[cfg(test)]
+mod vim_tests;
+
 use anyhow::Result;
 
 use super::commands;
 use super::mode::Mode;
 use super::state::App;
+use crate::clipboard::RegisterKind;
+use crate::clipboard::registers::Register;
 use crate::editor::cursor::Motion;
 use crate::editor::document::indent;
 use crate::editor::selection::Range;
-use crate::editor::window::WindowId;
-use crate::input::Action;
+use crate::editor::window::{VisualMemory, WindowId};
+use crate::input::{Action, Operator, notation};
 use crate::picker::PickerTarget;
 use crate::ui::widgets::editor_view;
 
+/// How many keys one burst of macro playback may feed in before it is
+/// stopped, so a macro that calls itself cannot hang the editor.
+const MACRO_KEY_LIMIT: usize = 100_000;
+
 pub fn apply(app: &mut App, action: Action) -> Result<()> {
+    record_change(app, &action);
+    let result = execute(app, action);
+    finish_change(app);
+    result
+}
+
+/// Whether `action`, typed in normal mode, changes the text and so is what
+/// `.` should repeat.
+fn is_change(action: &Action) -> bool {
+    match action {
+        Action::Operate { operator, .. } => operator.changes_text(),
+        Action::WithRegister { action, .. } | Action::Repeat { action, .. } => is_change(action),
+        Action::Put { .. }
+        | Action::Paste
+        | Action::ReplaceChar { .. }
+        | Action::ToggleCaseChars(_)
+        | Action::Join { .. }
+        | Action::EnterMode(Mode::Insert)
+        | Action::OpenLineBelow
+        | Action::OpenLineAbove
+        | Action::AppendAfter
+        | Action::AppendAtLineEnd
+        | Action::InsertAtLineStart
+        | Action::DeleteForward
+        | Action::DeleteBackward
+        | Action::ToggleComment => true,
+        _ => false,
+    }
+}
+
+/// Whether `action`, typed during the insert session a change opened, belongs
+/// to that change.
+const fn belongs_to_insert(action: &Action) -> bool {
+    matches!(
+        action,
+        Action::Insert(_)
+            | Action::InsertText(_)
+            | Action::InsertNewline
+            | Action::InsertIndent
+            | Action::DeleteBackward
+            | Action::DeleteForward
+            | Action::DeleteWordBackward
+            | Action::DeleteWordForward
+            | Action::Move(_)
+            | Action::EnterMode(Mode::Normal)
+            | Action::Paste
+    )
+}
+
+fn record_change(app: &mut App, action: &Action) {
+    if app.replaying {
+        return;
+    }
+    if let Some(recording) = app.change_recording.as_mut() {
+        if belongs_to_insert(action) {
+            recording.push(action.clone());
+        }
+        return;
+    }
+    if app.mode == Mode::Normal && is_change(action) {
+        app.change_recording = Some(vec![action.clone()]);
+    }
+}
+
+fn finish_change(app: &mut App) {
+    if app.mode != Mode::Insert
+        && let Some(recording) = app.change_recording.take()
+    {
+        app.last_change = recording;
+    }
+}
+
+/// `.` — replay the last change, with a new count if one was typed.
+fn repeat_change(app: &mut App, count: Option<usize>) -> Result<()> {
+    let mut actions = app.last_change.clone();
+    if actions.is_empty() {
+        return Ok(());
+    }
+    let rounds = match count {
+        Some(count)
+            if actions
+                .first_mut()
+                .is_some_and(|first| set_count(first, count)) =>
+        {
+            1
+        }
+        Some(count) => count,
+        None => 1,
+    };
+    app.replaying = true;
+    for _ in 0..rounds {
+        for action in &actions {
+            if let Err(error) = execute(app, action.clone()) {
+                app.replaying = false;
+                return Err(error);
+            }
+        }
+        // A replay that ended in insert mode (an interrupted recording) must
+        // not leave the editor there.
+        if app.mode == Mode::Insert {
+            enter_mode(app, Mode::Normal);
+        }
+    }
+    app.replaying = false;
+    Ok(())
+}
+
+/// Swap the count inside a repeatable action; false when it has none.
+fn set_count(action: &mut Action, new: usize) -> bool {
+    match action {
+        Action::Operate { count, .. }
+        | Action::Put { count, .. }
+        | Action::ReplaceChar { count, .. }
+        | Action::Join { count, .. } => {
+            *count = new;
+            true
+        }
+        Action::ToggleCaseChars(count) => {
+            *count = new;
+            true
+        }
+        Action::WithRegister { action, .. } => set_count(action, new),
+        _ => false,
+    }
+}
+
+fn execute(app: &mut App, action: Action) -> Result<()> {
     if app.popup.is_some() && app.mode == Mode::Confirm {
         if !matches!(&action, Action::ConfirmDelete | Action::ConfirmCancel) {
             return Ok(());
@@ -31,8 +169,76 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
     match action {
         Action::None => {}
 
+        Action::EnterMode(Mode::VisualBlock) if app.mode == Mode::VisualBlock => {
+            enter_mode(app, Mode::Normal);
+        }
         Action::EnterMode(mode) => enter_mode(app, mode),
-        Action::Move(motion) => move_cursors(app, motion, false),
+        Action::Move(motion) => {
+            if motion.is_jump() && !app.mode.is_insert() {
+                app.window_mut().record_jump();
+            }
+            move_cursors(app, motion, false);
+        }
+        Action::Goto { goal, count } => motion::goto(app, goal, count),
+        Action::Operate {
+            operator,
+            target,
+            count,
+        } => operator::operate(app, operator, target, count),
+        Action::OperateSelection { operator, count } => {
+            if app.mode.is_visual() {
+                operator::operate_selection(app, operator, count);
+            }
+        }
+        Action::SelectObject {
+            object,
+            inner,
+            count,
+        } => operator::select_object(app, object, inner, count),
+        Action::Put { before, count } => operator::put(app, before, count),
+        Action::Repeat { count, action } => {
+            for _ in 0..count {
+                execute(app, (*action).clone())?;
+            }
+        }
+        Action::WithRegister { register, action } => {
+            app.registers.select(register);
+            let result = execute(app, *action);
+            app.registers.clear_selection();
+            result?;
+        }
+        Action::RepeatChange(count) => repeat_change(app, count)?,
+        Action::ReplaceChar { ch, count } => operator::replace_char(app, ch, count),
+        Action::ToggleCaseChars(count) => operator::toggle_case_chars(app, count),
+        Action::Join { count, spaces } => operator::join(app, count, spaces),
+        Action::JoinSelection { spaces } => operator::join_selection(app, spaces),
+        Action::ReplaceSelection(ch) => operator::replace_selection(app, ch),
+        Action::SwapAnchor => {
+            for cursor in app.window_mut().cursors_mut() {
+                std::mem::swap(&mut cursor.anchor, &mut cursor.head);
+            }
+        }
+        Action::BlockInsert { append } => operator::block_insert(app, append),
+        Action::SetMark(name) => motion::set_mark(app, name),
+        Action::RecordMacro(register) => {
+            app.macro_recording = Some((register, Vec::new()));
+            app.info(format!("recording @{register}"));
+        }
+        Action::StopMacro => stop_macro(app),
+        Action::PlayMacro { register, count } => play_macro(app, register, count)?,
+        Action::SearchWord { forward, whole } => search_word(app, forward, whole),
+        Action::RunCommand(line) => commands::run(app, &line),
+        Action::ScrollCaret(row) => motion::scroll_caret(app, row),
+        Action::Reselect => reselect(app),
+        Action::JumpBack => motion::jump(app, true),
+        Action::JumpForward => motion::jump(app, false),
+        Action::InsertText(text) => {
+            let mut edit = app.edit();
+            edit.delete_selections();
+            edit.insert_text(&text);
+            edit.checkpoint();
+        }
+        Action::ToggleComment => operator::toggle_comment(app),
         Action::Extend(motion) => move_cursors(app, motion, true),
         Action::Select(motion) => move_cursors(app, motion, true),
         Action::SelectAll => select_all(app),
@@ -77,7 +283,6 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
                 edit.delete_word_forward();
             }
         }
-        Action::Delete => delete_target(app),
 
         Action::OpenLineBelow => open_line(app, true),
         Action::OpenLineAbove => open_line(app, false),
@@ -105,9 +310,15 @@ pub fn apply(app: &mut App, action: Action) -> Result<()> {
             }
         }
 
+        Action::Yank if app.mode.is_visual() => {
+            operator::operate_selection(app, Operator::Yank, 1);
+        }
+        Action::Cut if app.mode.is_visual() => {
+            operator::operate_selection(app, Operator::Delete, 1);
+        }
         Action::Yank => yank(app, false),
         Action::Cut => yank(app, true),
-        Action::Paste => paste(app),
+        Action::Paste => operator::paste(app),
 
         Action::AddCursor { below } => add_cursor(app, below),
         Action::ClearCursors => {
@@ -521,6 +732,14 @@ fn enter_mode(app: &mut App, mode: Mode) {
     if app.mode == mode {
         return;
     }
+    let leaving = app.mode;
+    if leaving.is_visual() {
+        remember_visual(app, leaving);
+    }
+    if leaving == Mode::Insert && app.insert_group_open {
+        app.edit().end_group();
+        app.insert_group_open = false;
+    }
     app.edit().checkpoint();
 
     match mode {
@@ -528,15 +747,140 @@ fn enter_mode(app: &mut App, mode: Mode) {
             app.window_mut().collapse_selections();
             app.clamp_cursors(false);
         }
-        Mode::Visual | Mode::VisualLine => {
-            app.clamp_cursors(false);
-            app.window_mut().anchor_selections();
+        Mode::Visual | Mode::VisualLine | Mode::VisualBlock => {
+            // Switching between the visual modes keeps the selection; only
+            // arriving from elsewhere starts a new one.
+            if !leaving.is_visual() {
+                app.clamp_cursors(false);
+                app.window_mut().anchor_selections();
+            }
+            if mode == Mode::VisualBlock {
+                app.window_mut().clear_secondary_cursors();
+            }
         }
         Mode::Command => app.command_line.clear(),
         Mode::Insert => app.window_mut().collapse_selections(),
         Mode::Search | Mode::Tree | Mode::Picker | Mode::Confirm | Mode::Terminal => {}
     }
     app.mode = mode;
+}
+
+/// Keep a visual selection for `gv`, and as the `<` and `>` marks.
+fn remember_visual(app: &mut App, mode: Mode) {
+    let cursor = app.window().cursor();
+    app.window_mut().last_visual = Some(VisualMemory {
+        mode: mode.name(),
+        anchor: cursor.anchor,
+        head: cursor.head,
+    });
+    let (start, end) = if cursor.anchor <= cursor.head {
+        (cursor.anchor, cursor.head)
+    } else {
+        (cursor.head, cursor.anchor)
+    };
+    let marks = &mut app.buffer_mut().marks;
+    marks.insert('<', start);
+    marks.insert('>', end);
+}
+
+/// `gv` — bring the last visual selection back.
+fn reselect(app: &mut App) {
+    let Some(memory) = app.window().last_visual else {
+        app.info("no previous selection");
+        return;
+    };
+    let mode = match memory.mode {
+        "V-LINE" => Mode::VisualLine,
+        "V-BLOCK" => Mode::VisualBlock,
+        _ => Mode::Visual,
+    };
+    if app.mode.is_visual() {
+        enter_mode(app, Mode::Normal);
+    }
+    enter_mode(app, mode);
+    let document = &app.buffer().document;
+    let anchor = document.clamp(memory.anchor, false);
+    let head = document.clamp(memory.head, false);
+    let cursor = app.window_mut().cursor_mut();
+    cursor.move_to(anchor, false);
+    cursor.move_to(head, true);
+}
+
+/// `q` again — store the recording in its register as key notation.
+fn stop_macro(app: &mut App) {
+    let Some((register, mut keys)) = app.macro_recording.take() else {
+        return;
+    };
+    // The `q` that stopped the recording was recorded too.
+    keys.pop();
+    let text = notation::encode(&keys);
+    app.registers.set_named(
+        register.to_ascii_lowercase(),
+        Register::new(text, RegisterKind::Charwise),
+    );
+    app.last_macro = Some(register.to_ascii_lowercase());
+    app.info(format!("recorded @{register}"));
+}
+
+/// `@a` — feed a register's keys back in, `count` times; `@@` repeats the
+/// last one and `@:` the last command line.
+fn play_macro(app: &mut App, register: char, count: usize) -> Result<()> {
+    let register = if register == '@' {
+        match app.last_macro {
+            Some(last) => last,
+            None => {
+                app.info("no macro played yet");
+                return Ok(());
+            }
+        }
+    } else {
+        register
+    };
+    if register == ':' {
+        let Some(line) = app.registers.named(':').map(|r| r.text.clone()) else {
+            app.info("no previous command");
+            return Ok(());
+        };
+        for _ in 0..count.max(1) {
+            commands::run(app, &line);
+        }
+        return Ok(());
+    }
+    let Some(text) = app.registers.named(register).map(|r| r.text.clone()) else {
+        app.error(format!("register {register} is empty"));
+        return Ok(());
+    };
+    let keys = match notation::parse(&text) {
+        Ok(keys) => keys,
+        Err(error) => {
+            app.error(error);
+            return Ok(());
+        }
+    };
+    if keys.len().saturating_mul(count) > MACRO_KEY_LIMIT {
+        app.error("macro too long to play");
+        return Ok(());
+    }
+    app.last_macro = Some(register);
+    for _ in 0..count.max(1) {
+        app.pending_keys.extend(keys.iter().copied());
+    }
+    Ok(())
+}
+
+/// `*` and `#` — search for the word under the caret.
+fn search_word(app: &mut App, forward: bool, whole: bool) {
+    let Some(word) = operator::word_under_caret(app) else {
+        app.error("no word under the caret");
+        return;
+    };
+    app.search.set_word(&word, whole, forward);
+    app.registers.set_named(
+        '/',
+        Register::new(app.search.query.clone(), RegisterKind::Charwise),
+    );
+    app.window_mut().record_jump();
+    repeat_search(app, forward);
 }
 
 fn close_picker(app: &mut App) {
@@ -566,7 +910,7 @@ fn submit_picker(app: &mut App) {
     }
 }
 
-fn move_cursors(app: &mut App, motion: Motion, extend: bool) {
+pub(super) fn move_cursors(app: &mut App, motion: Motion, extend: bool) {
     let extend = extend || app.mode.is_visual();
     let allow_eol = app.mode.is_insert() || (extend && !app.mode.is_visual());
     app.edit().checkpoint();
@@ -607,12 +951,6 @@ fn target_range(app: &App) -> (Range, bool) {
     }
 }
 
-fn delete_target(app: &mut App) {
-    let (range, _) = target_range(app);
-    app.edit().delete_range(range);
-    enter_mode(app, Mode::Normal);
-}
-
 fn yank(app: &mut App, cut: bool) {
     let (range, line_wise) = target_range(app);
     let text = app.buffer().document.slice_string(range.start, range.end);
@@ -621,7 +959,16 @@ fn yank(app: &mut App, cut: bool) {
     }
     let lines = text.lines().count();
     let characters = text.chars().count();
-    app.clipboard.set(text, line_wise);
+    let kind = if line_wise {
+        RegisterKind::Linewise
+    } else {
+        RegisterKind::Charwise
+    };
+    if cut {
+        app.registers.delete(text, kind);
+    } else {
+        app.registers.yank(text, kind);
+    }
 
     if cut {
         app.edit().delete_range(range);
@@ -637,18 +984,6 @@ fn yank(app: &mut App, cut: bool) {
             if characters == 1 { "" } else { "s" }
         )
     });
-}
-
-fn paste(app: &mut App) {
-    let text = app.clipboard.get();
-    if text.is_empty() {
-        app.info("clipboard is empty");
-        return;
-    }
-    app.edit().delete_selections();
-    let line_wise = app.clipboard.is_line_wise();
-    app.edit().paste(&text, line_wise);
-    enter_mode(app, Mode::Normal);
 }
 
 fn open_line(app: &mut App, below: bool) {
@@ -897,7 +1232,10 @@ mod tests {
         press(&mut app, Action::SelectAll);
         press(&mut app, Action::Yank);
 
-        assert_eq!(app.clipboard.get(), "abc");
+        assert_eq!(
+            app.registers.get().map(|r| r.text).unwrap_or_default(),
+            "abc"
+        );
     }
 
     #[test]
@@ -949,8 +1287,9 @@ mod tests {
         }
         press(&mut app, Action::Yank);
 
-        assert_eq!(app.clipboard.get(), "hello");
-        assert!(!app.clipboard.is_line_wise());
+        let register = app.registers.get().expect("yanked");
+        assert_eq!(register.text, "hello");
+        assert_eq!(register.kind, RegisterKind::Charwise);
         assert_eq!(text_of(&app), "hello world", "copying changes nothing");
     }
 
@@ -976,7 +1315,8 @@ mod tests {
     fn pasting_over_a_selection_replaces_it() {
         let mut app = app();
         type_text(&mut app, "one two");
-        app.clipboard.set("three".to_string(), false);
+        app.registers
+            .yank("three".to_string(), RegisterKind::Charwise);
         press(&mut app, Action::Move(Motion::LineStart));
         for _ in 0..3 {
             press(&mut app, Action::Select(Motion::Right));
@@ -992,8 +1332,9 @@ mod tests {
         type_text(&mut app, "alpha\nbravo");
         press(&mut app, Action::Yank);
 
-        assert!(app.clipboard.is_line_wise());
-        assert_eq!(app.clipboard.get(), "bravo");
+        let register = app.registers.get().expect("yanked");
+        assert_eq!(register.kind, RegisterKind::Linewise);
+        assert_eq!(register.text, "bravo");
     }
 
     #[test]
@@ -1016,7 +1357,13 @@ mod tests {
         press(&mut app, Action::Move(Motion::LineStart));
         press(&mut app, Action::EnterMode(Mode::Visual));
         press(&mut app, Action::Extend(Motion::Right));
-        press(&mut app, Action::Delete);
+        press(
+            &mut app,
+            Action::OperateSelection {
+                operator: Operator::Delete,
+                count: 1,
+            },
+        );
 
         assert_eq!(text_of(&app), "llo");
     }

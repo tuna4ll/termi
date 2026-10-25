@@ -24,6 +24,8 @@ pub enum Mode {
     Visual,
     /// Line-wise selection is extended by movement.
     VisualLine,
+    /// A rectangle of columns is extended by movement.
+    VisualBlock,
     /// The command bar is focused and accumulating an ex-style command line.
     Command,
     /// The search prompt is focused; the document scrolls as the query is typed.
@@ -47,6 +49,7 @@ impl Mode {
             Self::Insert => "INSERT",
             Self::Visual => "VISUAL",
             Self::VisualLine => "V-LINE",
+            Self::VisualBlock => "V-BLOCK",
             Self::Command => "COMMAND",
             Self::Search => "SEARCH",
             Self::Tree => "TREE",
@@ -60,7 +63,7 @@ impl Mode {
     /// collapsing it.
     #[must_use]
     pub const fn is_visual(self) -> bool {
-        matches!(self, Self::Visual | Self::VisualLine)
+        matches!(self, Self::Visual | Self::VisualLine | Self::VisualBlock)
     }
 
     /// Whether printable keys should be inserted as text.

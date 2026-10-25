@@ -78,6 +78,33 @@ impl Range {
         Self { start, end }
     }
 
+    /// The spans a cursor covers in visual block mode: one per line, each
+    /// running between the two columns the anchor and head mark out, inclusive
+    /// of both.
+    ///
+    /// Columns are character offsets, so a tab counts as one; lines too short
+    /// to reach the block contribute an empty span.
+    #[must_use]
+    pub fn block(cursor: &Cursor, doc: &Document) -> Vec<Self> {
+        let (first, last) = if cursor.anchor.line <= cursor.head.line {
+            (cursor.anchor.line, cursor.head.line)
+        } else {
+            (cursor.head.line, cursor.anchor.line)
+        };
+        let left = cursor.anchor.col.min(cursor.head.col);
+        let right = cursor.anchor.col.max(cursor.head.col) + 1;
+        (first..=last.min(doc.last_line()))
+            .map(|line| {
+                let start = doc.line_start(line);
+                let len = doc.line_len(line);
+                Self {
+                    start: start + left.min(len),
+                    end: start + right.min(len),
+                }
+            })
+            .collect()
+    }
+
     /// Whether the range covers nothing.
     #[must_use]
     pub const fn is_empty(&self) -> bool {

@@ -13,13 +13,15 @@
 //!
 //! **Public API:** [`App`], [`Status`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
+
+use crossterm::event::KeyEvent;
 
 use anyhow::Result;
 
 use super::mode::Mode;
-use crate::clipboard::Clipboard;
+use crate::clipboard::registers::Registers;
 use crate::config::{self, Config};
 use crate::editor::buffer::{Buffer, BufferId};
 use crate::editor::cursor::{Cursor, Motion, Position};
@@ -27,6 +29,7 @@ use crate::editor::document::Document;
 use crate::editor::edit::Edit;
 use crate::editor::window::{Window, WindowId, Windows};
 use crate::filesystem::tree::Tree;
+use crate::input::Action;
 use crate::picker::{Picker, PickerItem, PickerKind, PickerTarget, project_files};
 use crate::search::Search;
 use crate::terminal::Terminal;
@@ -64,8 +67,27 @@ pub struct App {
     pub command_line: String,
     /// Message shown in the command bar.
     pub status: Status,
-    /// Yank register, backed by the system clipboard when one is available.
-    pub clipboard: Clipboard,
+    /// vi registers; the unnamed one is the system clipboard when available.
+    pub registers: Registers,
+    /// Marks `A` to `Z`, which remember a file as well as a place in it.
+    pub global_marks: HashMap<char, (PathBuf, Position)>,
+    /// The register a macro is being recorded into, and the keys so far.
+    pub macro_recording: Option<(char, Vec<KeyEvent>)>,
+    /// The macro `@@` repeats.
+    pub last_macro: Option<char>,
+    /// Keys waiting to be handled as though typed — a macro being played.
+    pub pending_keys: VecDeque<KeyEvent>,
+    /// The actions `.` repeats.
+    pub last_change: Vec<Action>,
+    /// The change being recorded for `.`, while its insert session lasts.
+    pub change_recording: Option<Vec<Action>>,
+    /// Whether `.` is replaying, so the replay does not record itself.
+    pub replaying: bool,
+    /// Whether a `c` operator's undo group is still waiting for its insert
+    /// session to end, so the deletion and the typing undo together.
+    pub insert_group_open: bool,
+    /// The keys of a command still being typed, shown in the status bar.
+    pub showcmd: String,
     /// Incremental search state, kept across searches so `n` can repeat one.
     pub search: Search,
     /// File browser, built on first use and kept afterwards so the expanded
@@ -122,7 +144,7 @@ impl App {
     }
 
     fn assemble(config: Config, theme: Theme) -> Self {
-        let clipboard = Clipboard::new(config.system_clipboard);
+        let registers = Registers::new(config.system_clipboard);
         Self {
             mode: Mode::default(),
             config,
@@ -132,7 +154,16 @@ impl App {
             terminals: HashMap::new(),
             command_line: String::new(),
             status: Status::default(),
-            clipboard,
+            registers,
+            global_marks: HashMap::new(),
+            macro_recording: None,
+            last_macro: None,
+            pending_keys: VecDeque::new(),
+            last_change: Vec::new(),
+            change_recording: None,
+            replaying: false,
+            insert_group_open: false,
+            showcmd: String::new(),
             search: Search::default(),
             tree: None,
             tree_selected: 0,

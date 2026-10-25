@@ -43,6 +43,10 @@ pub struct StatusBar<'a> {
     /// those leave the mode alone — so the count is what tells the user how much
     /// the next keystroke is about to act on.
     pub selected: usize,
+    /// Keys of a command still being typed, such as `2d`.
+    pub pending: &'a str,
+    /// The register a macro is being recorded into.
+    pub recording: Option<char>,
     /// Colours.
     pub theme: &'a Theme,
 }
@@ -73,10 +77,21 @@ impl Widget for StatusBar<'_> {
                 self.theme.status,
             ));
         }
+        if let Some(register) = self.recording {
+            left.push(Span::styled(
+                format!("  recording @{register}"),
+                self.theme.status_dirty,
+            ));
+        }
 
         let right = Line::from(Span::styled(
             format!(
-                " {}  {}  {}:{}  {}% ",
+                " {}{}  {}  {}:{}  {}% ",
+                if self.pending.is_empty() {
+                    String::new()
+                } else {
+                    format!("{}  ", self.pending)
+                },
                 self.language,
                 self.line_ending.label(),
                 self.position.line + 1,

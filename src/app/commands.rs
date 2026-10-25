@@ -11,19 +11,33 @@ use crate::picker::PickerKind;
 use crate::theme::Theme;
 
 const HELP: &str = "\
-MODES     i insert    v visual    V line    : command    / search
+MODES     i a I A o O insert    v visual    V line    Alt+v block
+          : command    / ? search
 
-MOVE      h j k l     w b e words     0 ^ $ line     gg G file
+MOVE      h j k l     w b e  W B E words    0 ^ $ line    gg G file
+          f t F T x  find on the line       ; , repeat the find
+          % bracket   { } paragraph         H M L screen  zt zz zb scroll
           Ctrl+left/right by word           Ctrl+Home/End file
+          a count first repeats it: 3j  5w  10G
+MARKS     ma set     'a line    `a place   (A-Z work across files)
+JUMPS     Alt+left back     Alt+right forward
 SELECT    Ctrl+A all        Shift+arrows      Ctrl+Shift+arrows by word
           click to place the caret, drag to select
           Backspace or Delete removes it, typing replaces it
-EDIT      x delete    dd line     yy yank    p paste    u undo
-          Ctrl+Backspace / Ctrl+Del delete a word or a run of blanks
+
+OPERATORS d delete    c change    y yank    > < indent    gc comment
+          gu gU g~ case — follow with a motion, a text object, or
+          themselves for whole lines: dw  c$  y3j  dd  gcc  >ip
+OBJECTS   iw aw  iW aW  ip ap  i( a(  i[ a[  i{ a{  i< a<  i\" a\"  i' a'  it at
+EDIT      x X delete   s S C D change/delete   r replace   ~ case   J join
+          p P put      u undo   Ctrl+R redo    . repeat the last change
+          Ctrl+/ toggle comments     Ctrl+Backspace / Ctrl+Del a word
+REGISTERS \"a-\"z named   \"0 last yank   \"1-\"9 deletes   \"_ discard   \"+ clipboard
+MACROS    qa record   q stop   @a play   @@ again   @: last command
 CLIPBOARD Ctrl+C copy    Ctrl+X cut    Ctrl+V paste
-SEARCH    / next      ? previous      n / N repeat
+SEARCH    / next      ? previous      n / N repeat     * # word under caret
 FILES     Ctrl+O find     Ctrl+B tree                  Ctrl+S save
-          Ctrl+N / Ctrl+P buffers
+          Ctrl+N / Ctrl+P buffers    gt gT too
 TREE      a file    A directory    r rename    c copy    m move
           d delete  . hidden files
 WINDOWS   Ctrl+W then     s / v split     c close     o only      t terminal
@@ -31,7 +45,8 @@ WINDOWS   Ctrl+W then     s / v split     c close     o only      t terminal
                           + - taller      < > wider
 TERMINAL  :terminal [command]        Ctrl+W t opens another terminal
 
-COMMANDS  :w [path]  :q[!]  :wq  :wa  :qa[!]  :wqa  :e[!] path  :touch path  :mkdir path
+COMMANDS  :w [path]  :q[!]  :wq  :wa  :qa[!]  :wqa  :e[!] path
+          :touch path  :mkdir path
           :find  :buffers  :commands  :themes  :bn  :bp
           :sp  :vs  :clo  :on
           :set <option> [value]     :theme <name>     :<line>

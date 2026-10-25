@@ -11,8 +11,11 @@
 //!
 //! **Public API:** [`Buffer`], [`BufferId`].
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 
+use crate::editor::cursor::Position;
 use crate::editor::document::Document;
 use crate::syntax::{self, HighlightCache};
 use crate::undo::History;
@@ -34,6 +37,9 @@ pub struct Buffer {
     pub history: History,
     /// Detected language and the per-line syntax state derived from it.
     pub syntax: HighlightCache,
+    /// Marks set with `m` and the ones the editor keeps itself: `<` and `>`
+    /// for the last visual selection, `.` for the last change.
+    pub marks: HashMap<char, Position>,
 }
 
 impl Buffer {
@@ -45,6 +51,7 @@ impl Buffer {
             document,
             history: History::default(),
             syntax,
+            marks: HashMap::new(),
         }
     }
 

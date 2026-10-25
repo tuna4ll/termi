@@ -51,6 +51,12 @@ impl HighlightCache {
         self.states.clear();
     }
 
+    /// The language in use, if any.
+    #[must_use]
+    pub fn language(&self) -> Option<&'static super::Language> {
+        self.highlighter.map(|h| h.language)
+    }
+
     /// Language name for the status bar.
     #[must_use]
     pub fn language_name(&self) -> &'static str {

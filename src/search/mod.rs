@@ -38,6 +38,8 @@ pub struct Search {
     error: Option<String>,
     /// Where the search started, so cancelling can go back.
     origin: usize,
+    /// Treat this query as a regex whatever the setting says — `*` builds one.
+    force_regex: bool,
 }
 
 impl Search {
@@ -46,6 +48,7 @@ impl Search {
         self.query.clear();
         self.matcher = None;
         self.error = None;
+        self.force_regex = false;
         self.origin = origin;
         self.forward = forward;
     }
@@ -59,6 +62,20 @@ impl Search {
     /// Replace the query and recompile.
     pub fn set_query(&mut self, query: String) {
         self.query = query;
+        self.compile();
+    }
+
+    /// Search for `word`, as `*` and `#` do; `whole` keeps it from matching
+    /// inside a longer word.
+    pub fn set_word(&mut self, word: &str, whole: bool, forward: bool) {
+        self.forward = forward;
+        self.force_regex = true;
+        let escaped = regex::escape(word);
+        self.query = if whole {
+            format!(r"\b{escaped}\b")
+        } else {
+            escaped
+        };
         self.compile();
     }
 
@@ -195,7 +212,11 @@ impl Search {
             self.error = None;
             return;
         }
-        match Matcher::new(&self.query, self.regex, self.case_sensitive) {
+        match Matcher::new(
+            &self.query,
+            self.regex || self.force_regex,
+            self.case_sensitive,
+        ) {
             Ok(matcher) => {
                 self.matcher = Some(matcher);
                 self.error = None;

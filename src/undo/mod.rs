@@ -114,6 +114,10 @@ pub struct History {
     open: bool,
     /// Maximum number of undo steps kept.
     limit: usize,
+    /// How many [`History::begin_group`] calls are still open.
+    group_depth: usize,
+    /// Whether the open group has recorded nothing yet.
+    group_fresh: bool,
 }
 
 impl Default for History {
@@ -123,6 +127,8 @@ impl Default for History {
             redo: Vec::new(),
             open: false,
             limit: 1000,
+            group_depth: 0,
+            group_fresh: false,
         }
     }
 }
@@ -138,6 +144,23 @@ impl History {
         }
         // Any new edit invalidates the redo branch.
         self.redo.clear();
+
+        if self.group_depth > 0 {
+            if !self.group_fresh
+                && let Some(top) = self.undo.last_mut()
+            {
+                top.changes.push(change);
+                top.after = after;
+                return;
+            }
+            self.group_fresh = false;
+            self.undo.push(Transaction {
+                changes: vec![change],
+                before,
+                after,
+            });
+            return;
+        }
 
         if self.open
             && let Some(top) = self.undo.last_mut()
@@ -163,6 +186,28 @@ impl History {
     /// Close the current transaction so the next edit starts a new undo step.
     pub fn checkpoint(&mut self) {
         self.open = false;
+    }
+
+    /// Gather every change until the matching [`History::end_group`] into one
+    /// undo step, however they were made — `dw` at five cursors, a `:s` over
+    /// the whole file, `ci(` before the typing that follows it.
+    ///
+    /// Groups nest; only the outermost one decides where the step begins and
+    /// ends.
+    pub fn begin_group(&mut self) {
+        if self.group_depth == 0 {
+            self.open = false;
+            self.group_fresh = true;
+        }
+        self.group_depth += 1;
+    }
+
+    /// Close a group opened by [`History::begin_group`].
+    pub fn end_group(&mut self) {
+        self.group_depth = self.group_depth.saturating_sub(1);
+        if self.group_depth == 0 {
+            self.open = false;
+        }
     }
 
     /// Undo one transaction, returning the caret position to restore.
@@ -259,6 +304,21 @@ mod tests {
 
         type_text(&mut history, &mut document, 0, "x");
         assert!(history.redo(&mut document).is_none());
+    }
+
+    #[test]
+    fn a_group_undoes_as_one_step() {
+        let mut history = History::default();
+        let mut document = doc("abc");
+        history.begin_group();
+        document.remove(0, 1);
+        history.record(Change::deletion(0, "a"), Position::ZERO, Position::ZERO);
+        document.insert(0, "xy");
+        history.record(Change::insertion(0, "xy"), Position::ZERO, Position::ZERO);
+        history.end_group();
+        assert_eq!(document.text().to_string(), "xybc");
+        history.undo(&mut document);
+        assert_eq!(document.text().to_string(), "abc");
     }
 
     #[test]

@@ -12,13 +12,28 @@
 //! where the caret is. The system clipboard cannot carry that flag, so it is
 //! tracked here.
 //!
-//! **Public API:** [`Clipboard`].
+//! **Public API:** [`Clipboard`], [`RegisterKind`], [`registers::Registers`].
+
+pub mod registers;
+
+/// The shape of copied text, which decides how it is put back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RegisterKind {
+    /// A fragment, spliced in at the caret.
+    #[default]
+    Charwise,
+    /// Whole lines, put above or below the caret's line.
+    Linewise,
+    /// A rectangle, one line of text per screen line, put at the caret's
+    /// column on successive lines.
+    Blockwise,
+}
 
 /// The editor's copy buffer.
 pub struct Clipboard {
     system: Option<arboard::Clipboard>,
     register: String,
-    line_wise: bool,
+    kind: RegisterKind,
 }
 
 impl std::fmt::Debug for Clipboard {
@@ -26,7 +41,7 @@ impl std::fmt::Debug for Clipboard {
         f.debug_struct("Clipboard")
             .field("system", &self.system.is_some())
             .field("register", &self.register.len())
-            .field("line_wise", &self.line_wise)
+            .field("kind", &self.kind)
             .finish()
     }
 }
@@ -38,19 +53,19 @@ impl Clipboard {
         Self {
             system: use_system.then(|| arboard::Clipboard::new().ok()).flatten(),
             register: String::new(),
-            line_wise: false,
+            kind: RegisterKind::Charwise,
         }
     }
 
-    /// Store `text`, remembering whether it covers whole lines.
-    pub fn set(&mut self, text: String, line_wise: bool) {
+    /// Store `text`, remembering its shape.
+    pub fn set(&mut self, text: String, kind: RegisterKind) {
         if let Some(system) = self.system.as_mut() {
             // A clipboard failure must not lose the yank, so ignore the error
             // and rely on the register below.
             let _ = system.set_text(text.clone());
         }
         self.register = text;
-        self.line_wise = line_wise;
+        self.kind = kind;
     }
 
     /// Retrieve the clipboard contents.
@@ -65,16 +80,20 @@ impl Clipboard {
             // Text from elsewhere has no line-wise flag; treat it as a fragment
             // unless it is exactly what we put there.
             if text != self.register {
-                self.line_wise = text.ends_with('\n');
+                self.kind = if text.ends_with('\n') {
+                    RegisterKind::Linewise
+                } else {
+                    RegisterKind::Charwise
+                };
             }
             return text;
         }
         self.register.clone()
     }
 
-    /// Whether the stored text was yanked as whole lines.
+    /// The shape of what [`Clipboard::get`] last returned.
     #[must_use]
-    pub const fn is_line_wise(&self) -> bool {
-        self.line_wise
+    pub const fn kind(&self) -> RegisterKind {
+        self.kind
     }
 }

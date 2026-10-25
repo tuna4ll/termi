@@ -13,6 +13,7 @@
 //! - [`window`] — a view onto a buffer: its cursors and scroll position
 //! - [`edit`] — the operations that change a buffer's text through a window
 //! - [`command`] — ex-style commands typed into the command bar
+//! - [`textobject`] — the spans `iw`, `a(`, `it` and friends name
 
 pub mod buffer;
 pub mod command;
@@ -20,4 +21,5 @@ pub mod cursor;
 pub mod document;
 pub mod edit;
 pub mod selection;
+pub mod textobject;
 pub mod window;

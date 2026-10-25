@@ -61,8 +61,11 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
             // Windows reports both press and release; acting on both would
             // double every keystroke.
             Event::Key(key) if key.kind == KeyEventKind::Press => {
-                let action = input.handle(key, app.mode);
-                dispatch::apply(app, action)?;
+                if let Some((_, keys)) = app.macro_recording.as_mut() {
+                    keys.push(key);
+                }
+                handle_key(app, &mut input, key)?;
+                drain_pending_keys(app, &mut input)?;
             }
             Event::Mouse(mouse) => {
                 let action = input.handle_mouse(mouse);
@@ -74,14 +77,40 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
                         app.error(error.to_string());
                     }
                 } else {
-                    let mut edit = app.edit();
-                    edit.insert_text(&text);
-                    edit.checkpoint();
+                    dispatch::apply(app, crate::input::Action::InsertText(text))?;
                 }
             }
             Event::Resize(_, _) => tui.clear()?,
             _ => {}
         }
+    }
+    Ok(())
+}
+
+/// Turn one key into an action and carry it out.
+fn handle_key(app: &mut App, input: &mut Input, key: crossterm::event::KeyEvent) -> Result<()> {
+    input.recording = app.macro_recording.is_some();
+    let action = input.handle(key, app.mode);
+    dispatch::apply(app, action)?;
+    app.showcmd = input.pending_keys();
+    Ok(())
+}
+
+/// Most keys a single burst of queued input may contain; past this a macro
+/// is assumed to be calling itself and is stopped.
+const PENDING_KEY_LIMIT: usize = 100_000;
+
+/// Handle the keys a macro queued up, as though they had been typed.
+fn drain_pending_keys(app: &mut App, input: &mut Input) -> Result<()> {
+    let mut handled = 0;
+    while let Some(key) = app.pending_keys.pop_front() {
+        handled += 1;
+        if handled > PENDING_KEY_LIMIT {
+            app.pending_keys.clear();
+            app.error("macro stopped after too many keys");
+            break;
+        }
+        handle_key(app, input, key)?;
     }
     Ok(())
 }

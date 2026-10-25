@@ -10,6 +10,7 @@
 //!
 //! **Public API:** [`Position`], [`Cursor`], [`Motion`].
 
+pub mod scan;
 pub mod word;
 
 use crate::editor::document::{Document, indent};
@@ -141,6 +142,87 @@ pub enum Motion {
     DocEnd,
     /// First non-blank character of a specific line, as used by `:42`.
     ToLine(usize),
+    /// Start of the next WORD — `W`.
+    BigWordForward,
+    /// Start of the previous WORD — `B`.
+    BigWordBackward,
+    /// Last character of the current or next WORD — `E`.
+    BigWordEnd,
+    /// The blank line after this paragraph — `}`.
+    ParagraphForward,
+    /// The blank line before this paragraph — `{`.
+    ParagraphBackward,
+    /// The bracket pairing with the one under or after the caret — `%`.
+    MatchingBracket,
+}
+
+/// How an operator treats the text between the caret and where a motion lands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MotionKind {
+    /// The character the motion lands on is left out — `w`, `h`, `0`.
+    Exclusive,
+    /// The character the motion lands on is included — `e`, `$`, `f`.
+    Inclusive,
+    /// Every line touched is covered in full — `j`, `G`, `gg`.
+    Linewise,
+}
+
+impl Motion {
+    /// The span an operator should cover when combined with this motion.
+    #[must_use]
+    pub const fn kind(self) -> MotionKind {
+        match self {
+            Self::Up(_) | Self::Down(_) | Self::DocStart | Self::DocEnd | Self::ToLine(_) => {
+                MotionKind::Linewise
+            }
+            Self::WordEnd | Self::BigWordEnd | Self::LineEnd | Self::MatchingBracket => {
+                MotionKind::Inclusive
+            }
+            Self::Left
+            | Self::Right
+            | Self::WordForward
+            | Self::WordBackward
+            | Self::BigWordForward
+            | Self::BigWordBackward
+            | Self::LineStart
+            | Self::LineFirstNonBlank
+            | Self::ParagraphForward
+            | Self::ParagraphBackward => MotionKind::Exclusive,
+        }
+    }
+
+    /// Whether landing here should leave a note in the jump list, so the
+    /// reader can come back.
+    #[must_use]
+    pub const fn is_jump(self) -> bool {
+        matches!(
+            self,
+            Self::DocStart
+                | Self::DocEnd
+                | Self::ToLine(_)
+                | Self::ParagraphForward
+                | Self::ParagraphBackward
+                | Self::MatchingBracket
+        )
+    }
+
+    /// The same motion repeated `count` times, where the motion can say so
+    /// itself; `None` when it has to be applied repeatedly.
+    #[must_use]
+    pub const fn scaled(self, count: usize) -> Option<Self> {
+        Some(match self {
+            Self::Up(n) => Self::Up(n * count),
+            Self::Down(n) => Self::Down(n * count),
+            Self::DocEnd | Self::DocStart => Self::ToLine(count.saturating_sub(1)),
+            Self::LineEnd if count > 1 => return None,
+            Self::LineStart
+            | Self::LineFirstNonBlank
+            | Self::LineEnd
+            | Self::ToLine(_)
+            | Self::MatchingBracket => self,
+            _ => return None,
+        })
+    }
 }
 
 impl Cursor {
@@ -193,6 +275,31 @@ impl Cursor {
                 let line = line.min(doc.last_line());
                 let target = Position::new(line, indent::first_non_blank(doc, line));
                 self.move_to(doc.clamp(target, allow_eol), extend);
+            }
+            Motion::BigWordForward => {
+                let target = word::next_big_word_start(doc, self.head);
+                self.move_to(doc.clamp(target, allow_eol), extend);
+            }
+            Motion::BigWordBackward => {
+                let target = word::prev_big_word_start(doc, self.head);
+                self.move_to(doc.clamp(target, allow_eol), extend);
+            }
+            Motion::BigWordEnd => {
+                let target = word::big_word_end(doc, self.head);
+                self.move_to(doc.clamp(target, allow_eol), extend);
+            }
+            Motion::ParagraphForward => {
+                let target = scan::paragraph_forward(doc, self.head);
+                self.move_to(doc.clamp(target, allow_eol), extend);
+            }
+            Motion::ParagraphBackward => {
+                let target = scan::paragraph_backward(doc, self.head);
+                self.move_to(doc.clamp(target, allow_eol), extend);
+            }
+            Motion::MatchingBracket => {
+                if let Some(target) = scan::bracket_partner_from(doc, self.head) {
+                    self.move_to(doc.clamp(target, allow_eol), extend);
+                }
             }
         }
     }

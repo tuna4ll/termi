@@ -119,7 +119,36 @@ pub struct Window {
     /// window rather than per file for the same reason two splits on one file
     /// scroll independently.
     anchors: HashMap<BufferId, Anchor>,
+    /// Places this window jumped away from, oldest first.
+    jumps: Vec<Jump>,
+    /// Where in `jumps` the window is; `jumps.len()` when not travelling.
+    jump_index: usize,
+    /// The last visual selection, for `gv`.
+    pub last_visual: Option<VisualMemory>,
 }
+
+/// One entry in a window's jump list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Jump {
+    /// Which buffer.
+    pub buffer: BufferId,
+    /// Where in it.
+    pub position: Position,
+}
+
+/// Enough of a visual selection to bring it back with `gv`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VisualMemory {
+    /// The visual mode it was made in, as the status-bar name.
+    pub mode: &'static str,
+    /// The fixed end.
+    pub anchor: Position,
+    /// The moving end.
+    pub head: Position,
+}
+
+/// How many places a window remembers having jumped from.
+const JUMP_LIMIT: usize = 100;
 
 impl Window {
     /// A window on `buffer`, with a single cursor at the top.
@@ -132,7 +161,65 @@ impl Window {
             primary: 0,
             area: Area::new(0, 0, 1, 1),
             anchors: HashMap::new(),
+            jumps: Vec::new(),
+            jump_index: 0,
+            last_visual: None,
         }
+    }
+
+    /// Note the caret's position before a jump, so `Alt+←` can return to it.
+    ///
+    /// A jump made while travelling back through the list forgets the places
+    /// ahead, the way a browser forgets forward history.
+    pub fn record_jump(&mut self) {
+        let here = Jump {
+            buffer: self.buffer,
+            position: self.cursor().head,
+        };
+        self.jumps.truncate(self.jump_index);
+        if self.jumps.last().is_some_and(|last| {
+            last.buffer == here.buffer && last.position.line == here.position.line
+        }) {
+            self.jumps.pop();
+        }
+        self.jumps.push(here);
+        if self.jumps.len() > JUMP_LIMIT {
+            self.jumps.remove(0);
+        }
+        self.jump_index = self.jumps.len();
+    }
+
+    /// The place the most recent jump left from, for `''`.
+    #[must_use]
+    pub fn last_jump(&self) -> Option<Jump> {
+        self.jump_index
+            .checked_sub(1)
+            .and_then(|index| self.jumps.get(index))
+            .copied()
+    }
+
+    /// Step back through the jump list, returning where to go.
+    pub fn jump_back(&mut self) -> Option<Jump> {
+        if self.jump_index == 0 {
+            return None;
+        }
+        // Leaving the newest position for the first time remembers it, so
+        // jumping forward again can come back.
+        if self.jump_index == self.jumps.len() {
+            self.record_jump();
+            self.jump_index = self.jumps.len() - 1;
+        }
+        self.jump_index -= 1;
+        self.jumps.get(self.jump_index).copied()
+    }
+
+    /// Step forward through the jump list, returning where to go.
+    pub fn jump_forward(&mut self) -> Option<Jump> {
+        if self.jump_index + 1 >= self.jumps.len() {
+            return None;
+        }
+        self.jump_index += 1;
+        self.jumps.get(self.jump_index).copied()
     }
 
     /// Show `buffer`, remembering where this window was in the current one and
@@ -190,6 +277,11 @@ impl Window {
     /// removed buffer should land, already expressed in the new numbering.
     pub fn buffer_removed(&mut self, removed: BufferId, fallback: BufferId) {
         let shift = |id: BufferId| if id > removed { id - 1 } else { id };
+        self.jumps.retain(|jump| jump.buffer != removed);
+        for jump in &mut self.jumps {
+            jump.buffer = shift(jump.buffer);
+        }
+        self.jump_index = self.jump_index.min(self.jumps.len());
         self.anchors = std::mem::take(&mut self.anchors)
             .into_iter()
             .filter(|(id, _)| *id != removed)
@@ -208,6 +300,24 @@ impl Window {
     #[must_use]
     pub fn cursor(&self) -> Cursor {
         self.cursors[self.primary]
+    }
+
+    /// Index of the primary cursor in [`Window::cursors`].
+    #[must_use]
+    pub const fn primary_index(&self) -> usize {
+        self.primary
+    }
+
+    /// Replace every cursor, keeping `primary` as the one the view follows.
+    ///
+    /// An empty list is ignored: a window always has a caret.
+    pub fn set_cursors(&mut self, cursors: Vec<Cursor>, primary: usize) {
+        if cursors.is_empty() {
+            return;
+        }
+        self.primary = primary.min(cursors.len() - 1);
+        self.cursors = cursors;
+        self.resort();
     }
 
     /// Mutable access to the primary cursor.

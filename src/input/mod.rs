@@ -1,18 +1,192 @@
 //! Keys to intentions: the `Action` vocabulary and multi-key sequence state.
 
+pub mod grammar;
 pub mod keymap;
+pub mod notation;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 
 use crate::app::mode::Mode;
 use crate::editor::cursor::Motion;
+use crate::editor::textobject::TextObject;
 use crate::editor::window::{Axis, Side};
 use crate::picker::PickerKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Pending {
-    Key(char),
     Window,
+}
+
+/// How an operator changes letter case.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CaseChange {
+    /// `gu` and visual `u`.
+    Lower,
+    /// `gU` and visual `U`.
+    Upper,
+    /// `g~` and `~`.
+    Toggle,
+}
+
+impl CaseChange {
+    /// Apply to a piece of text.
+    #[must_use]
+    pub fn apply(self, text: &str) -> String {
+        match self {
+            Self::Lower => text.to_lowercase(),
+            Self::Upper => text.to_uppercase(),
+            Self::Toggle => text
+                .chars()
+                .flat_map(|ch| {
+                    let flipped: Vec<char> = if ch.is_uppercase() {
+                        ch.to_lowercase().collect()
+                    } else {
+                        ch.to_uppercase().collect()
+                    };
+                    flipped
+                })
+                .collect(),
+        }
+    }
+}
+
+/// What a vi operator does to the span it is given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Operator {
+    /// `d`.
+    Delete,
+    /// `c` — delete, then insert.
+    Change,
+    /// `y`.
+    Yank,
+    /// `>`.
+    Indent,
+    /// `<`.
+    Dedent,
+    /// `gu`, `gU` and `g~`.
+    Case(CaseChange),
+    /// `gc` — toggle line comments.
+    Comment,
+}
+
+impl Operator {
+    /// The operator a key starts, if it starts one on its own.
+    #[must_use]
+    pub const fn from_key(key: Option<char>) -> Option<Self> {
+        Some(match key {
+            Some('d') => Self::Delete,
+            Some('c') => Self::Change,
+            Some('y') => Self::Yank,
+            Some('>') => Self::Indent,
+            Some('<') => Self::Dedent,
+            _ => return None,
+        })
+    }
+
+    /// The operator `g` followed by `key` starts.
+    #[must_use]
+    pub const fn from_g_key(key: char) -> Option<Self> {
+        Some(match key {
+            'u' => Self::Case(CaseChange::Lower),
+            'U' => Self::Case(CaseChange::Upper),
+            '~' => Self::Case(CaseChange::Toggle),
+            'c' => Self::Comment,
+            _ => return None,
+        })
+    }
+
+    /// The key that, typed after the operator, means "this line": `dd`, `gUU`.
+    #[must_use]
+    pub const fn doubled(self) -> Option<char> {
+        Some(match self {
+            Self::Delete => 'd',
+            Self::Change | Self::Comment => 'c',
+            Self::Yank => 'y',
+            Self::Indent => '>',
+            Self::Dedent => '<',
+            Self::Case(CaseChange::Lower) => 'u',
+            Self::Case(CaseChange::Upper) => 'U',
+            Self::Case(CaseChange::Toggle) => '~',
+        })
+    }
+
+    /// Whether the operator changes text, as opposed to only reading it.
+    #[must_use]
+    pub const fn changes_text(self) -> bool {
+        !matches!(self, Self::Yank)
+    }
+}
+
+/// An `f`, `t`, `F` or `T` search, kept so `;` and `,` can repeat it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FindSpec {
+    /// The character looked for.
+    pub target: char,
+    /// Search to the right.
+    pub forward: bool,
+    /// Stop one short of the character.
+    pub till: bool,
+}
+
+impl FindSpec {
+    /// The same search in the other direction, for `,`.
+    #[must_use]
+    pub const fn reversed(self) -> Self {
+        Self {
+            forward: !self.forward,
+            ..self
+        }
+    }
+}
+
+/// A row of the window, for `H`, `M`, `L` and `zt`, `zz`, `zb`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreenRow {
+    /// The first visible line.
+    Top,
+    /// The middle of the window.
+    Middle,
+    /// The last visible line.
+    Bottom,
+}
+
+/// Somewhere the caret can be sent.
+///
+/// Plain [`Motion`]s are answered by the document alone; the rest need the
+/// application — marks live in buffers, screen rows depend on the window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Goal {
+    /// A motion the cursor can work out by itself.
+    Motion(Motion),
+    /// `f`, `t`, `F` or `T`.
+    Find(FindSpec),
+    /// `;` or `,`: a find repeated without becoming the one to repeat.
+    Repeat(FindSpec),
+    /// `'a` (the line) or `` `a `` (the exact place).
+    Mark {
+        /// Which mark.
+        name: char,
+        /// Whether to land on the column too.
+        exact: bool,
+    },
+    /// `H`, `M` or `L`.
+    Screen(ScreenRow),
+}
+
+/// What an operator acts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// The doubled operator: whole lines, starting at the caret's.
+    Lines,
+    /// From the caret to wherever a goal lands.
+    Goal(Goal),
+    /// A text object around the caret.
+    Object {
+        /// Which object.
+        object: TextObject,
+        /// `i` rather than `a`.
+        inner: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -20,11 +194,80 @@ pub enum Action {
     None,
     EnterMode(Mode),
     Move(Motion),
+    Goto {
+        goal: Goal,
+        count: usize,
+    },
+    Operate {
+        operator: Operator,
+        target: Target,
+        count: usize,
+    },
+    OperateSelection {
+        operator: Operator,
+        count: usize,
+    },
+    SelectObject {
+        object: TextObject,
+        inner: bool,
+        count: usize,
+    },
+    Put {
+        before: bool,
+        count: usize,
+    },
+    Repeat {
+        count: usize,
+        action: Box<Action>,
+    },
+    WithRegister {
+        register: char,
+        action: Box<Action>,
+    },
+    RepeatChange(Option<usize>),
+    ReplaceChar {
+        ch: char,
+        count: usize,
+    },
+    ToggleCaseChars(usize),
+    Join {
+        count: usize,
+        spaces: bool,
+    },
+    JoinSelection {
+        spaces: bool,
+    },
+    ReplaceSelection(char),
+    SwapAnchor,
+    BlockInsert {
+        append: bool,
+    },
+    SetMark(char),
+    RecordMacro(char),
+    StopMacro,
+    PlayMacro {
+        register: char,
+        count: usize,
+    },
+    SearchWord {
+        forward: bool,
+        whole: bool,
+    },
+    RunCommand(String),
+    ScrollCaret(ScreenRow),
+    Reselect,
+    JumpBack,
+    JumpForward,
+    InsertText(String),
+    ToggleComment,
     Extend(Motion),
     Select(Motion),
     SelectAll,
     Scroll(isize),
-    Page { down: bool, half: bool },
+    Page {
+        down: bool,
+        half: bool,
+    },
 
     Insert(char),
     InsertNewline,
@@ -33,7 +276,6 @@ pub enum Action {
     DeleteForward,
     DeleteWordBackward,
     DeleteWordForward,
-    Delete,
     OpenLineBelow,
     OpenLineAbove,
     AppendAfter,
@@ -46,10 +288,14 @@ pub enum Action {
     Cut,
     Paste,
 
-    AddCursor { below: bool },
+    AddCursor {
+        below: bool,
+    },
     ClearCursors,
 
-    CycleBuffer { forward: bool },
+    CycleBuffer {
+        forward: bool,
+    },
     OpenPicker(PickerKind),
     PickerInput(char),
     PickerBackspace,
@@ -57,18 +303,33 @@ pub enum Action {
     PickerSubmit,
     PickerCancel,
 
-    SplitWindow { axis: Axis },
+    SplitWindow {
+        axis: Axis,
+    },
     CloseWindow,
     OnlyWindow,
     FocusWindow(Side),
     CycleWindow,
-    ResizeWindow { axis: Axis, delta: i16 },
+    ResizeWindow {
+        axis: Axis,
+        delta: i16,
+    },
     EqualiseWindows,
     OpenTerminal,
     TerminalInput(KeyEvent),
-    ClickAt { x: u16, y: u16 },
-    DragTo { x: u16, y: u16 },
-    ScrollAt { x: u16, y: u16, delta: isize },
+    ClickAt {
+        x: u16,
+        y: u16,
+    },
+    DragTo {
+        x: u16,
+        y: u16,
+    },
+    ScrollAt {
+        x: u16,
+        y: u16,
+        delta: isize,
+    },
 
     Save,
     Quit,
@@ -76,7 +337,9 @@ pub enum Action {
     ToggleTree,
     TreeMove(isize),
     TreeActivate,
-    TreeCreate { directory: bool },
+    TreeCreate {
+        directory: bool,
+    },
     TreeToggleHidden,
     TreeRename,
     TreeCopy,
@@ -86,12 +349,16 @@ pub enum Action {
     ConfirmDelete,
     ConfirmCancel,
 
-    SearchStart { forward: bool },
+    SearchStart {
+        forward: bool,
+    },
     SearchInput(char),
     SearchBackspace,
     SearchSubmit,
     SearchCancel,
-    SearchRepeat { forward: bool },
+    SearchRepeat {
+        forward: bool,
+    },
 
     CommandInput(char),
     CommandBackspace,
@@ -102,6 +369,12 @@ pub enum Action {
 #[derive(Debug, Default)]
 pub struct Input {
     pending: Option<Pending>,
+    /// Keys of a normal or visual mode command still being typed.
+    keys: Vec<KeyEvent>,
+    /// The last `f`, `t`, `F` or `T`, for `;` and `,`.
+    last_find: Option<FindSpec>,
+    /// Whether a macro is being recorded; set by the event loop.
+    pub recording: bool,
 }
 
 impl Input {
@@ -110,10 +383,18 @@ impl Input {
         if let Some(prefix) = self.pending.take() {
             return keymap::pending(prefix, key);
         }
+        if !matches!(
+            mode,
+            Mode::Normal | Mode::Visual | Mode::VisualLine | Mode::VisualBlock
+        ) {
+            self.keys.clear();
+        }
         let action = match mode {
-            Mode::Normal => keymap::normal(key, &mut self.pending),
+            Mode::Normal => self.sequence(key, mode, keymap::normal, grammar::normal),
+            Mode::Visual | Mode::VisualLine | Mode::VisualBlock => {
+                self.sequence(key, mode, keymap::visual, grammar::visual)
+            }
             Mode::Insert => keymap::insert(key),
-            Mode::Visual | Mode::VisualLine => keymap::visual(key, &mut self.pending),
             Mode::Command => keymap::command(key),
             Mode::Search => keymap::search(key),
             Mode::Tree => keymap::tree(key),
@@ -127,9 +408,80 @@ impl Input {
         action
     }
 
+    /// Feed one key to a mode that understands vi commands.
+    ///
+    /// Keys that never begin a command — Ctrl chords, Shift+arrows, Escape —
+    /// are answered straight away by `direct`; everything else accumulates
+    /// until `parse` recognises a whole command or rejects the lot.
+    fn sequence(
+        &mut self,
+        key: KeyEvent,
+        mode: Mode,
+        direct: fn(KeyEvent, &mut Option<Pending>) -> Option<Action>,
+        parse: fn(&[KeyEvent], grammar::Context) -> grammar::Parse,
+    ) -> Action {
+        if self.keys.is_empty() {
+            if let Some(action) = direct(key, &mut self.pending) {
+                return action;
+            }
+        } else if key.code == KeyCode::Esc {
+            self.keys.clear();
+            return Action::None;
+        }
+        self.keys.push(key);
+        let context = grammar::Context {
+            last_find: self.last_find,
+            recording: self.recording,
+            mode,
+        };
+        match parse(&self.keys, context) {
+            grammar::Parse::Incomplete => Action::None,
+            grammar::Parse::Invalid => {
+                self.keys.clear();
+                Action::None
+            }
+            grammar::Parse::Done(action) => {
+                self.keys.clear();
+                if let Some(spec) = find_of(&action) {
+                    self.last_find = Some(spec);
+                }
+                action
+            }
+        }
+    }
+
+    /// The keys of a command still being typed, for the status bar.
+    #[must_use]
+    pub fn pending_keys(&self) -> String {
+        self.keys
+            .iter()
+            .filter_map(|key| match key.code {
+                KeyCode::Char(ch) => Some(ch),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Action {
         self.pending = None;
+        self.keys.clear();
         keymap::mouse(event)
+    }
+}
+
+/// The `f`/`t` search inside an action, so `;` can repeat it.
+fn find_of(action: &Action) -> Option<FindSpec> {
+    match action {
+        Action::Goto {
+            goal: Goal::Find(spec),
+            ..
+        }
+        | Action::Operate {
+            target: Target::Goal(Goal::Find(spec)),
+            ..
+        } => Some(*spec),
+        Action::WithRegister { action, .. } | Action::Repeat { action, .. } => find_of(action),
+        _ => None,
     }
 }
 

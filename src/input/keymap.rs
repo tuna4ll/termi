@@ -2,7 +2,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use super::{Action, Pending, is_ctrl, is_plain};
+use super::{Action, Operator, Pending, is_ctrl, is_plain};
 use crate::app::mode::Mode;
 use crate::editor::cursor::Motion;
 use crate::editor::window::{Axis, Side};
@@ -42,26 +42,9 @@ fn universal(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('e') => Action::Scroll(1),
         KeyCode::Char('b') => Action::ToggleTree,
         KeyCode::Char('o') => Action::OpenPicker(PickerKind::Files),
-        _ => return None,
-    })
-}
-
-fn motion(key: KeyEvent) -> Option<Motion> {
-    if !is_plain(key.modifiers) {
-        return None;
-    }
-    Some(match key.code {
-        KeyCode::Char('h') | KeyCode::Left => Motion::Left,
-        KeyCode::Char('l') | KeyCode::Right => Motion::Right,
-        KeyCode::Char('k') | KeyCode::Up => Motion::Up(1),
-        KeyCode::Char('j') | KeyCode::Down => Motion::Down(1),
-        KeyCode::Char('w') => Motion::WordForward,
-        KeyCode::Char('b') => Motion::WordBackward,
-        KeyCode::Char('e') => Motion::WordEnd,
-        KeyCode::Char('0') | KeyCode::Home => Motion::LineStart,
-        KeyCode::Char('^') => Motion::LineFirstNonBlank,
-        KeyCode::Char('$') | KeyCode::End => Motion::LineEnd,
-        KeyCode::Char('G') => Motion::DocEnd,
+        // Ctrl+/ arrives as `/` from terminals speaking the kitty protocol and
+        // as the legacy 0x1F, which crossterm reports as Ctrl+7, elsewhere.
+        KeyCode::Char('/' | '7' | '_') => Action::ToggleComment,
         _ => return None,
     })
 }
@@ -109,61 +92,33 @@ fn word_delete(key: KeyEvent) -> Option<Action> {
     })
 }
 
-pub fn normal(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
+/// Normal-mode keys that are complete on their own and never begin a vi
+/// command: chords, special keys and Alt combinations.
+///
+/// `None` hands the key to the command grammar.
+pub fn normal(key: KeyEvent, pending: &mut Option<Pending>) -> Option<Action> {
     if window_prefix(key, pending) {
-        return Action::None;
+        return Some(Action::None);
     }
     if let Some(action) = word_delete(key) {
-        return action;
+        return Some(action);
     }
     if let Some(action) = universal(key) {
-        return action;
+        return Some(action);
     }
     if let Some(motion) = shift_motion(key) {
-        return Action::Select(motion);
+        return Some(Action::Select(motion));
     }
     if let Some(motion) = ctrl_motion(key) {
-        return Action::Move(motion);
-    }
-    if let Some(motion) = motion(key) {
-        return Action::Move(motion);
+        return Some(Action::Move(motion));
     }
     if key.modifiers.contains(KeyModifiers::ALT) {
-        return match key.code {
-            KeyCode::Down => Action::AddCursor { below: true },
-            KeyCode::Up => Action::AddCursor { below: false },
-            _ => Action::None,
-        };
+        return Some(alt(key));
     }
-    if !is_plain(key.modifiers) {
-        return Action::None;
-    }
-    match key.code {
-        KeyCode::Char('i') => Action::EnterMode(Mode::Insert),
-        KeyCode::Char('I') => Action::InsertAtLineStart,
-        KeyCode::Char('a') => Action::AppendAfter,
-        KeyCode::Char('A') => Action::AppendAtLineEnd,
-        KeyCode::Char('o') => Action::OpenLineBelow,
-        KeyCode::Char('O') => Action::OpenLineAbove,
-        KeyCode::Char('v') => Action::EnterMode(Mode::Visual),
-        KeyCode::Char('V') => Action::EnterMode(Mode::VisualLine),
-        KeyCode::Char(':') => Action::EnterMode(Mode::Command),
-
-        KeyCode::Char('x') | KeyCode::Delete => Action::DeleteForward,
+    Some(match key.code {
+        KeyCode::Esc => Action::ClearCursors,
         KeyCode::Backspace => Action::DeleteBackward,
-        KeyCode::Char('u') => Action::Undo,
-        KeyCode::Char('p') => Action::Paste,
-
-        KeyCode::Char('/') => Action::SearchStart { forward: true },
-        KeyCode::Char('?') => Action::SearchStart { forward: false },
-        KeyCode::Char('n') => Action::SearchRepeat { forward: true },
-        KeyCode::Char('N') => Action::SearchRepeat { forward: false },
-
-        KeyCode::Char(prefix @ ('g' | 'd' | 'y')) => {
-            *pending = Some(Pending::Key(prefix));
-            Action::None
-        }
-
+        KeyCode::Delete => Action::DeleteForward,
         KeyCode::PageDown => Action::Page {
             down: true,
             half: false,
@@ -172,14 +127,24 @@ pub fn normal(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
             down: false,
             half: false,
         },
-        KeyCode::Esc => Action::ClearCursors,
+        _ => return None,
+    })
+}
+
+/// Alt chords shared by normal and visual mode.
+fn alt(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Down => Action::AddCursor { below: true },
+        KeyCode::Up => Action::AddCursor { below: false },
+        KeyCode::Left => Action::JumpBack,
+        KeyCode::Right => Action::JumpForward,
+        KeyCode::Char('v' | 'V') => Action::EnterMode(Mode::VisualBlock),
         _ => Action::None,
     }
 }
 
 pub fn pending(prefix: Pending, key: KeyEvent) -> Action {
     match prefix {
-        Pending::Key(prefix) => sequence(prefix, key),
         Pending::Window => window(key),
     }
 }
@@ -190,19 +155,6 @@ pub fn terminal(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
         Action::None
     } else {
         Action::TerminalInput(key)
-    }
-}
-
-fn sequence(prefix: char, key: KeyEvent) -> Action {
-    match (prefix, key.code) {
-        ('g', KeyCode::Char('g')) => Action::Move(Motion::DocStart),
-        ('g', KeyCode::Char('e')) => Action::Move(Motion::DocEnd),
-        ('g', KeyCode::Char('h')) => Action::Move(Motion::LineStart),
-        ('g', KeyCode::Char('l')) => Action::Move(Motion::LineEnd),
-        ('g', KeyCode::Char('s')) => Action::Move(Motion::LineFirstNonBlank),
-        ('d', KeyCode::Char('d')) => Action::Delete,
-        ('y', KeyCode::Char('y')) => Action::Yank,
-        _ => Action::None,
     }
 }
 
@@ -306,41 +258,33 @@ pub fn insert(key: KeyEvent) -> Action {
     }
 }
 
-pub fn visual(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
+/// Visual-mode keys that are complete on their own; `None` hands the key to
+/// the command grammar.
+pub fn visual(key: KeyEvent, pending: &mut Option<Pending>) -> Option<Action> {
     if window_prefix(key, pending) {
-        return Action::None;
+        return Some(Action::None);
     }
     if let Some(action) = word_delete(key) {
-        return action;
+        return Some(action);
     }
     if let Some(action) = universal(key) {
-        return action;
+        return Some(action);
     }
     if let Some(motion) = shift_motion(key) {
-        return Action::Select(motion);
+        return Some(Action::Select(motion));
     }
     if let Some(motion) = ctrl_motion(key) {
-        return Action::Extend(motion);
+        return Some(Action::Extend(motion));
     }
-    if let Some(motion) = motion(key) {
-        return Action::Extend(motion);
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        return Some(alt(key));
     }
-    if !is_plain(key.modifiers) {
-        return Action::None;
-    }
-    match key.code {
-        KeyCode::Esc | KeyCode::Char('v') => Action::EnterMode(Mode::Normal),
-        KeyCode::Char('V') => Action::EnterMode(Mode::VisualLine),
-        KeyCode::Char(':') => Action::EnterMode(Mode::Command),
-        KeyCode::Char('d' | 'x') | KeyCode::Delete => Action::Delete,
-        KeyCode::Char('y') => Action::Yank,
-        KeyCode::Char('c') => Action::Cut,
-        KeyCode::Char('p') => Action::Paste,
-        KeyCode::Char('i') => Action::EnterMode(Mode::Insert),
-        KeyCode::Char('g') => {
-            *pending = Some(Pending::Key('g'));
-            Action::None
-        }
+    Some(match key.code {
+        KeyCode::Esc => Action::EnterMode(Mode::Normal),
+        KeyCode::Delete | KeyCode::Backspace => Action::OperateSelection {
+            operator: Operator::Delete,
+            count: 1,
+        },
         KeyCode::PageDown => Action::Page {
             down: true,
             half: false,
@@ -349,8 +293,8 @@ pub fn visual(key: KeyEvent, pending: &mut Option<Pending>) -> Action {
             down: false,
             half: false,
         },
-        _ => Action::None,
-    }
+        _ => return None,
+    })
 }
 
 pub fn command(key: KeyEvent) -> Action {

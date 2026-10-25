@@ -338,6 +338,72 @@ impl<'a> Edit<'a> {
         self.buffer.history.checkpoint();
     }
 
+    /// Start gathering edits into one undo step; see [`History::begin_group`].
+    ///
+    /// [`History::begin_group`]: crate::undo::History::begin_group
+    pub fn begin_group(&mut self) {
+        self.buffer.history.begin_group();
+    }
+
+    /// Close a group opened by [`Edit::begin_group`].
+    pub fn end_group(&mut self) {
+        self.buffer.history.end_group();
+    }
+
+    /// Replace `[start, end)` with `text`, recording both halves for undo.
+    ///
+    /// The building block of every operator: deleting is replacing with
+    /// nothing, inserting is replacing nothing.
+    pub fn replace(&mut self, start: usize, end: usize, text: &str) -> String {
+        let caret = self.window.cursor().head;
+        let removed = self.buffer.document.remove(start, end);
+        if !removed.is_empty() {
+            self.buffer
+                .history
+                .record(Change::deletion(start, removed.clone()), caret, caret);
+        }
+        if !text.is_empty() {
+            self.buffer.document.insert(start, text);
+            self.buffer
+                .history
+                .record(Change::insertion(start, text), caret, caret);
+        }
+        let line = self.buffer.document.char_to_pos(start).line;
+        self.buffer.invalidate_syntax_from(line);
+        self.buffer
+            .marks
+            .insert('.', self.buffer.document.char_to_pos(start));
+        removed
+    }
+
+    /// Apply replacements given in document order, returning where each one
+    /// starts in the text that results.
+    ///
+    /// Overlapping spans — two cursors on one line asking for `dd` — are
+    /// merged into the first so nothing is removed twice.
+    pub fn replace_many(&mut self, replacements: &[(Range, String)]) -> Vec<usize> {
+        let mut kept: Vec<&(Range, String)> = Vec::with_capacity(replacements.len());
+        for replacement in replacements {
+            if kept
+                .last()
+                .is_some_and(|previous| replacement.0.start < previous.0.end)
+            {
+                continue;
+            }
+            kept.push(replacement);
+        }
+        for (range, text) in kept.iter().rev() {
+            self.replace(range.start, range.end, text);
+        }
+        let mut shift = 0isize;
+        let mut starts = Vec::with_capacity(kept.len());
+        for (range, text) in kept {
+            starts.push(range.start.saturating_add_signed(shift));
+            shift += text.chars().count() as isize - (range.end - range.start) as isize;
+        }
+        starts
+    }
+
     fn invalidate_from_first_cursor(&mut self) {
         let line = self.window.cursors()[0].head.line;
         self.buffer.invalidate_syntax_from(line);

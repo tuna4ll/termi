@@ -353,6 +353,7 @@ fn selection_ranges(app: &App) -> Vec<Range> {
             .iter()
             .map(|c| Range::of_lines(c, document))
             .collect(),
+        Mode::VisualBlock => Range::block(&app.window().cursor(), document),
         _ => cursors
             .iter()
             .filter(|cursor| cursor.has_selection())
@@ -378,6 +379,8 @@ fn status_bar(app: &App) -> StatusBar<'_> {
             .iter()
             .map(|range| range.end - range.start)
             .sum(),
+        pending: &app.showcmd,
+        recording: app.macro_recording.as_ref().map(|(register, _)| *register),
         theme: &app.theme,
     }
 }

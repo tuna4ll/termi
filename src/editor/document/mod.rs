@@ -14,6 +14,7 @@
 //! **Public API:** [`Document`], [`LineEnding`], and the [`indent`] and
 //! [`pairs`] helpers.
 
+pub mod comment;
 pub mod indent;
 pub mod pairs;
 
