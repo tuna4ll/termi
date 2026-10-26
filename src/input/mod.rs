@@ -284,6 +284,8 @@ pub enum Action {
 
     Undo,
     Redo,
+    UndoEarlier(usize),
+    UndoLater(usize),
     Yank,
     Cut,
     Paste,

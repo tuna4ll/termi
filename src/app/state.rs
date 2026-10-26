@@ -393,7 +393,11 @@ impl App {
             self.record_recent(path);
             return Ok(());
         }
-        let buffer = Buffer::new(Document::open(path.clone())?);
+        let mut buffer = Buffer::new(Document::open(path.clone())?);
+        match self.undo_dir() {
+            Some(directory) => buffer.restore_history(&directory, self.config.undo_limit),
+            None => buffer.history.set_limit(self.config.undo_limit),
+        }
 
         // The initial scratch buffer is a placeholder, not a document the user
         // asked for; replace it rather than accumulating an empty tab.
@@ -562,6 +566,18 @@ impl App {
         !self.terminal_focused()
             && !self.mode.is_visual()
             && self.window().cursors().iter().any(Cursor::has_selection)
+    }
+
+    /// Where persistent undo histories go, when they are wanted at all.
+    ///
+    /// Tests never write there: their files are throwaway, and the directory
+    /// is the real user's.
+    #[must_use]
+    pub fn undo_dir(&self) -> Option<PathBuf> {
+        if cfg!(test) || !self.config.persistent_undo {
+            return None;
+        }
+        Some(config::data_dir().join("undo"))
     }
 
     /// What to tell the user when unsaved work blocks quitting, naming the

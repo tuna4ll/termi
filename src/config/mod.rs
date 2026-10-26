@@ -30,6 +30,21 @@ pub fn config_dir() -> PathBuf {
         .join("termi")
 }
 
+/// Directory for what the editor writes rather than what the user writes:
+/// undo histories, swap files, sessions, command history.
+///
+/// `TERMI_DATA_DIR` overrides the platform default, for the same reasons as
+/// `TERMI_CONFIG_DIR`.
+#[must_use]
+pub fn data_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("TERMI_DATA_DIR") {
+        return PathBuf::from(dir);
+    }
+    dirs::data_local_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("termi")
+}
+
 /// Directory searched for custom theme files.
 #[must_use]
 pub fn themes_dir() -> PathBuf {
@@ -80,6 +95,10 @@ pub struct Config {
     /// turning off for anyone who selects text that way; most terminals still
     /// offer their own selection under Shift.
     pub mouse: bool,
+    /// Most undo states kept per buffer.
+    pub undo_limit: usize,
+    /// Keep each file's undo history on disk, so it survives a restart.
+    pub persistent_undo: bool,
 }
 
 impl Default for Config {
@@ -101,6 +120,8 @@ impl Default for Config {
             trim_trailing_whitespace: false,
             system_clipboard: true,
             mouse: true,
+            undo_limit: 1000,
+            persistent_undo: true,
         }
     }
 }
@@ -144,6 +165,7 @@ impl Config {
     fn sanitise(&mut self) {
         self.tab_width = self.tab_width.clamp(1, 16);
         self.scrolloff = self.scrolloff.min(32);
+        self.undo_limit = self.undo_limit.clamp(1, 100_000);
     }
 }
 

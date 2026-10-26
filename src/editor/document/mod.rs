@@ -355,6 +355,18 @@ impl Document {
     pub const fn is_dirty(&self) -> bool {
         self.dirty
     }
+
+    /// Say whether the text differs from the file, after undo has walked it
+    /// back to — or away from — the state that was saved.
+    pub const fn set_dirty(&mut self, dirty: bool) {
+        self.dirty = dirty;
+    }
+
+    /// The whole text as it would be written to disk.
+    #[must_use]
+    pub fn disk_text(&self) -> String {
+        self.to_disk_text()
+    }
 }
 
 /// Length of a line slice with any `\r\n` / `\n` terminator removed.

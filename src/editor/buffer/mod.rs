@@ -12,13 +12,14 @@
 //! **Public API:** [`Buffer`], [`BufferId`].
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
 use crate::editor::cursor::Position;
 use crate::editor::document::Document;
 use crate::syntax::{self, HighlightCache};
-use crate::undo::History;
+use crate::undo::{History, persist};
 
 /// Position of a buffer in the editor's buffer list.
 ///
@@ -65,6 +66,50 @@ impl Buffer {
     pub fn detect_language(&mut self) {
         self.syntax
             .set_language(self.document.path().and_then(syntax::detect));
+    }
+
+    /// Write the buffer to its file and remember that state as the saved one.
+    ///
+    /// When `undo_dir` is given the history is written there too, so it is
+    /// still there the next time the file is opened.
+    ///
+    /// # Errors
+    /// Returns an error if the document has no path or the write fails.
+    pub fn save(&mut self, undo_dir: Option<&Path>) -> Result<()> {
+        self.document.save()?;
+        self.after_save(undo_dir);
+        Ok(())
+    }
+
+    /// Write the buffer to `path`, adopting it as the buffer's file.
+    ///
+    /// # Errors
+    /// Returns an error if the write fails.
+    pub fn save_as(&mut self, path: PathBuf, undo_dir: Option<&Path>) -> Result<()> {
+        self.document.save_as(path)?;
+        self.after_save(undo_dir);
+        Ok(())
+    }
+
+    fn after_save(&mut self, undo_dir: Option<&Path>) {
+        self.history.mark_saved();
+        if let (Some(directory), Some(path)) = (undo_dir, self.document.path()) {
+            // Losing the history on disk is not worth failing a save over.
+            let _ = persist::save(directory, path, &self.document.disk_text(), &self.history);
+        }
+    }
+
+    /// Pick up the history saved for this file last time, if the file has not
+    /// changed since.
+    pub fn restore_history(&mut self, undo_dir: &Path, limit: usize) {
+        let Some(path) = self.document.path() else {
+            return;
+        };
+        if let Some(history) = persist::load(undo_dir, path, &self.document.disk_text(), limit) {
+            self.history = history;
+        } else {
+            self.history.set_limit(limit);
+        }
     }
 
     /// Re-read the file from disk, discarding unsaved changes.

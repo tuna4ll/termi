@@ -81,6 +81,8 @@ pub fn parse(input: &str) -> Result<Command, String> {
             |name| Ok(Command::Theme(name)),
         ),
         "set" => parse_set(rest),
+        "earlier" | "ea" => count_argument(rest).map(Command::Earlier),
+        "later" | "lat" => count_argument(rest).map(Command::Later),
         "help" | "h" => Ok(Command::Help),
         "find" | "files" => Ok(Command::Find),
         "buffers" | "ls" => Ok(Command::Buffers),
@@ -88,6 +90,16 @@ pub fn parse(input: &str) -> Result<Command, String> {
         "themes" => Ok(Command::Themes),
         other => Err(format!("unknown command: {other}")),
     }
+}
+
+/// An optional step count, one when left out.
+fn count_argument(rest: &str) -> Result<usize, String> {
+    if rest.is_empty() {
+        return Ok(1);
+    }
+    rest.parse::<usize>()
+        .map(|count| count.max(1))
+        .map_err(|_| format!("not a count: {rest}"))
 }
 
 /// Read the required path shared by filesystem commands.

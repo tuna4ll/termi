@@ -70,6 +70,10 @@ pub enum Command {
         /// Apply to the whole document rather than the current line.
         whole_file: bool,
     },
+    /// `:earlier [n]` — step back through every state the buffer has had.
+    Earlier(usize),
+    /// `:later [n]` — step forward again.
+    Later(usize),
     /// `:help` — list the commands.
     Help,
     /// `:find` — search project files.

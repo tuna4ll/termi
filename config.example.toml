@@ -39,6 +39,10 @@ watch_files = true             # reload clean buffers and refresh the file tree
 trim_trailing_whitespace = false
 system_clipboard = true        # false uses an internal register instead
 
+# Undo.
+undo_limit = 1000              # states kept per buffer
+persistent_undo = true         # keep each file's undo history across restarts
+
 # Let the mouse place the caret, select by dragging, and focus and scroll
 # windows. Capturing the mouse takes drag-to-select away from the terminal
 # itself; most terminals still offer that under Shift, but set this to false to

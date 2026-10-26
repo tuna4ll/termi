@@ -358,6 +358,8 @@ impl Parser<'_> {
                 spaces: false,
             },
             'v' => Action::Reselect,
+            '-' => Action::UndoEarlier(n),
+            '+' => Action::UndoLater(n),
             '*' => Action::SearchWord {
                 forward: true,
                 whole: false,

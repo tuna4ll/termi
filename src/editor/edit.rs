@@ -334,6 +334,28 @@ impl<'a> Edit<'a> {
         true
     }
 
+    /// `g-` — step back in time through every branch of the history.
+    pub fn earlier(&mut self, count: usize) -> bool {
+        let Some(position) = self
+            .buffer
+            .history
+            .earlier(&mut self.buffer.document, count)
+        else {
+            return false;
+        };
+        self.restore_caret(position);
+        true
+    }
+
+    /// `g+` — step forward in time.
+    pub fn later(&mut self, count: usize) -> bool {
+        let Some(position) = self.buffer.history.later(&mut self.buffer.document, count) else {
+            return false;
+        };
+        self.restore_caret(position);
+        true
+    }
+
     pub fn checkpoint(&mut self) {
         self.buffer.history.checkpoint();
     }
@@ -428,6 +450,10 @@ impl<'a> Edit<'a> {
     }
 
     fn restore_caret(&mut self, position: Position) {
+        // Walking the history back to the saved state makes the buffer clean
+        // again; walking away from it makes it dirty, whatever came before.
+        let saved = self.buffer.history.is_saved();
+        self.buffer.document.set_dirty(!saved);
         self.window.clear_secondary_cursors();
         let clamped = self.buffer.document.clamp(position, true);
         self.window.cursor_mut().move_to(clamped, false);

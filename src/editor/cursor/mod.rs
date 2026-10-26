@@ -19,7 +19,19 @@ use crate::editor::document::{Document, indent};
 ///
 /// The derived `Ord` compares `line` before `col`, which is exactly document
 /// order — that is what makes range normalisation in `selection` a one-liner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default, Hash)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Default,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub struct Position {
     /// Zero-based line index.
     pub line: usize,

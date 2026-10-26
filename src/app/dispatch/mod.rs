@@ -304,6 +304,16 @@ fn execute(app: &mut App, action: Action) -> Result<()> {
                 app.info("already at the oldest change");
             }
         }
+        Action::UndoEarlier(count) => {
+            if !app.edit().earlier(count) {
+                app.info("already at the oldest state");
+            }
+        }
+        Action::UndoLater(count) => {
+            if !app.edit().later(count) {
+                app.info("already at the newest state");
+            }
+        }
         Action::Redo => {
             if !app.edit().redo() {
                 app.info("already at the newest change");
@@ -1027,7 +1037,8 @@ fn save(app: &mut App) {
     if app.config.trim_trailing_whitespace {
         app.edit().trim_trailing_whitespace();
     }
-    match app.buffer_mut().document.save() {
+    let undo_dir = app.undo_dir();
+    match app.buffer_mut().save(undo_dir.as_deref()) {
         Ok(()) => {
             let name = app.buffer().document.display_name().to_string();
             app.info(format!("wrote {name}"));

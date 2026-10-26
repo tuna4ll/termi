@@ -270,3 +270,25 @@ fn a_count_before_g_names_a_line() {
     typed(&mut app, "dgg");
     assert_eq!(text(&app), "4");
 }
+
+#[test]
+fn undoing_back_to_the_saved_text_makes_the_buffer_clean() {
+    let mut app = editor("text");
+    typed(&mut app, "x");
+    assert!(app.buffer().document.is_dirty());
+    typed(&mut app, "u");
+    assert!(!app.buffer().document.is_dirty());
+    typed(&mut app, "<C-r>");
+    assert!(app.buffer().document.is_dirty());
+}
+
+#[test]
+fn g_minus_reaches_an_abandoned_branch() {
+    let mut app = editor("");
+    typed(&mut app, "iabc<Esc>uixyz<Esc>");
+    assert_eq!(text(&app), "xyz");
+    typed(&mut app, "g-");
+    assert_eq!(text(&app), "abc");
+    typed(&mut app, "g+");
+    assert_eq!(text(&app), "xyz");
+}

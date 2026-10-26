@@ -31,6 +31,7 @@ OPERATORS d delete    c change    y yank    > < indent    gc comment
 OBJECTS   iw aw  iW aW  ip ap  i( a(  i[ a[  i{ a{  i< a<  i\" a\"  i' a'  it at
 EDIT      x X delete   s S C D change/delete   r replace   ~ case   J join
           p P put      u undo   Ctrl+R redo    . repeat the last change
+          g- g+ step through every undo branch    :earlier :later
           Ctrl+/ toggle comments     Ctrl+Backspace / Ctrl+Del a word
 REGISTERS \"a-\"z named   \"0 last yank   \"1-\"9 deletes   \"_ discard   \"+ clipboard
 MACROS    qa record   q stop   @a play   @@ again   @: last command
@@ -121,6 +122,16 @@ fn execute(app: &mut App, command: Command) {
             all,
             whole_file,
         } => substitute(app, &pattern, &replacement, all, whole_file),
+        Command::Earlier(count) => {
+            if !app.edit().earlier(count) {
+                app.info("already at the oldest state");
+            }
+        }
+        Command::Later(count) => {
+            if !app.edit().later(count) {
+                app.info("already at the newest state");
+            }
+        }
         Command::Help => app.show_popup("termi", HELP),
         Command::Find => app.open_picker(PickerKind::Files),
         Command::Buffers => app.open_picker(PickerKind::Buffers),
@@ -210,9 +221,10 @@ fn write(app: &mut App, path: Option<PathBuf>) {
         app.edit().trim_trailing_whitespace();
     }
     let renamed = path.is_some();
+    let undo_dir = app.undo_dir();
     let result = match path {
-        Some(path) => app.buffer_mut().document.save_as(path),
-        None => app.buffer_mut().document.save(),
+        Some(path) => app.buffer_mut().save_as(path, undo_dir.as_deref()),
+        None => app.buffer_mut().save(undo_dir.as_deref()),
     };
     match result {
         Ok(()) => {
@@ -236,6 +248,7 @@ fn write(app: &mut App, path: Option<PathBuf>) {
 /// cost the user the other nine.
 fn write_all(app: &mut App) -> bool {
     let trim = app.config.trim_trailing_whitespace;
+    let undo_dir = app.undo_dir();
     let mut written = 0;
     let mut failures = Vec::new();
     for buffer in &mut app.buffers {
@@ -253,7 +266,7 @@ fn write_all(app: &mut App) -> bool {
             let mut window = crate::editor::window::Window::new(0);
             crate::editor::edit::Edit::new(buffer, &mut window).trim_trailing_whitespace();
         }
-        match buffer.document.save() {
+        match buffer.save(undo_dir.as_deref()) {
             Ok(()) => written += 1,
             Err(error) => failures.push(error.to_string()),
         }

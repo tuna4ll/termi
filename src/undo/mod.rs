@@ -13,7 +13,17 @@
 //! transaction; the editor calls it on mode changes and cursor motions, which is
 //! exactly where a user expects an undo step to end.
 //!
-//! **Public API:** [`Change`], [`Transaction`], [`History`].
+//! Undo is a tree rather than a stack. Undoing and then typing something new
+//! starts a branch instead of throwing the undone edits away, so nothing the
+//! user typed is ever lost: `u` and `Ctrl+R` walk up and down the current
+//! branch, while `g-` and `g+` walk every state the buffer has been in, in the
+//! order it was in them, crossing branches as they go.
+//!
+//! **Public API:** [`Change`], [`Transaction`], [`History`], [`Snapshot`].
+
+pub mod persist;
+
+use serde::{Deserialize, Serialize};
 
 use crate::editor::cursor::Position;
 use crate::editor::document::Document;
@@ -23,7 +33,7 @@ use crate::editor::document::Document;
 /// Both sides may be empty: an insertion has no `removed`, a deletion has no
 /// `inserted`. Swapping the two fields inverts the change, which is the whole
 /// trick behind undo.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Change {
     /// Character index the change starts at.
     pub at: usize,
@@ -76,7 +86,7 @@ impl Change {
 }
 
 /// A group of changes undone and redone as one step.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Transaction {
     changes: Vec<Change>,
     /// Caret position before the transaction, restored on undo.
@@ -86,6 +96,22 @@ pub struct Transaction {
 }
 
 impl Transaction {
+    /// Revert every change, last first.
+    fn revert(&self, document: &mut Document) {
+        // Changes were applied front to back, so they must be reverted back to
+        // front for the offsets to line up.
+        for change in self.changes.iter().rev() {
+            change.inverted().apply(document);
+        }
+    }
+
+    /// Apply every change again, first first.
+    fn replay(&self, document: &mut Document) {
+        for change in &self.changes {
+            change.apply(document);
+        }
+    }
+
     /// Whether `change` continues the last one in this transaction.
     ///
     /// Only straight-line typing and straight-line backspacing merge; anything
@@ -105,14 +131,38 @@ impl Transaction {
     }
 }
 
-/// The undo and redo stacks for one buffer.
+/// One state of the buffer: the edit that led to it, and where it sits in the
+/// tree.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Node {
+    /// The state this one was reached from; the root points at itself.
+    parent: usize,
+    /// The edit that turns the parent's text into this node's.
+    transaction: Transaction,
+    /// The branch `redo` follows — the child most recently left or made.
+    redo_child: Option<usize>,
+}
+
+/// A buffer's history, as it is written to disk for persistent undo.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Snapshot {
+    nodes: Vec<Node>,
+    current: usize,
+}
+
+/// Every state one buffer has been in.
 #[derive(Debug)]
 pub struct History {
-    undo: Vec<Transaction>,
-    redo: Vec<Transaction>,
+    /// Node 0 is the oldest state still reachable; indices grow with time, so
+    /// a node's index is also its place in chronological order.
+    nodes: Vec<Node>,
+    /// The state the document is in now.
+    current: usize,
+    /// The state the file on disk is in, when it is one of these.
+    saved: Option<usize>,
     /// Whether the newest transaction may still absorb further changes.
     open: bool,
-    /// Maximum number of undo steps kept.
+    /// Maximum number of states kept.
     limit: usize,
     /// How many [`History::begin_group`] calls are still open.
     group_depth: usize,
@@ -122,18 +172,29 @@ pub struct History {
 
 impl Default for History {
     fn default() -> Self {
-        Self {
-            undo: Vec::new(),
-            redo: Vec::new(),
-            open: false,
-            limit: 1000,
-            group_depth: 0,
-            group_fresh: false,
-        }
+        Self::with_limit(1000)
     }
 }
 
 impl History {
+    /// An empty history keeping at most `limit` states.
+    #[must_use]
+    pub fn with_limit(limit: usize) -> Self {
+        Self {
+            nodes: vec![Node {
+                parent: 0,
+                transaction: Transaction::default(),
+                redo_child: None,
+            }],
+            current: 0,
+            saved: Some(0),
+            open: false,
+            limit: limit.max(1),
+            group_depth: 0,
+            group_fresh: false,
+        }
+    }
+
     /// Record a change that has already been applied to the document.
     ///
     /// `before` and `after` are the caret positions around the edit, so undo can
@@ -142,45 +203,33 @@ impl History {
         if change.removed.is_empty() && change.inserted.is_empty() {
             return;
         }
-        // Any new edit invalidates the redo branch.
-        self.redo.clear();
-
-        if self.group_depth > 0 {
-            if !self.group_fresh
-                && let Some(top) = self.undo.last_mut()
-            {
-                top.changes.push(change);
-                top.after = after;
-                return;
-            }
-            self.group_fresh = false;
-            self.undo.push(Transaction {
-                changes: vec![change],
-                before,
-                after,
-            });
-            return;
-        }
-
-        if self.open
-            && let Some(top) = self.undo.last_mut()
-            && top.absorbs(&change)
-        {
+        let extend = if self.group_depth > 0 {
+            !std::mem::replace(&mut self.group_fresh, false)
+        } else {
+            self.open && self.nodes[self.current].transaction.absorbs(&change)
+        };
+        // A state that was saved and then extended is no longer the saved one.
+        if extend && self.current != 0 && self.saved != Some(self.current) {
+            let top = &mut self.nodes[self.current].transaction;
             top.changes.push(change);
             top.after = after;
             return;
         }
 
-        self.undo.push(Transaction {
-            changes: vec![change],
-            before,
-            after,
+        let parent = self.current;
+        self.nodes.push(Node {
+            parent,
+            transaction: Transaction {
+                changes: vec![change],
+                before,
+                after,
+            },
+            redo_child: None,
         });
-        self.open = true;
-
-        if self.undo.len() > self.limit {
-            self.undo.remove(0);
-        }
+        self.current = self.nodes.len() - 1;
+        self.nodes[parent].redo_child = Some(self.current);
+        self.open = self.group_depth == 0;
+        self.prune();
     }
 
     /// Close the current transaction so the next edit starts a new undo step.
@@ -212,28 +261,162 @@ impl History {
 
     /// Undo one transaction, returning the caret position to restore.
     pub fn undo(&mut self, document: &mut Document) -> Option<Position> {
-        let transaction = self.undo.pop()?;
-        // Changes were applied front to back, so they must be reverted back to
-        // front for the offsets to line up.
-        for change in transaction.changes.iter().rev() {
-            change.inverted().apply(document);
+        if self.current == 0 {
+            return None;
         }
-        let position = transaction.before;
-        self.redo.push(transaction);
+        let node = &self.nodes[self.current];
+        node.transaction.revert(document);
+        let position = node.transaction.before;
+        let parent = node.parent;
+        self.nodes[parent].redo_child = Some(self.current);
+        self.current = parent;
         self.open = false;
         Some(position)
     }
 
     /// Redo one transaction, returning the caret position to restore.
     pub fn redo(&mut self, document: &mut Document) -> Option<Position> {
-        let transaction = self.redo.pop()?;
-        for change in &transaction.changes {
-            change.apply(document);
-        }
-        let position = transaction.after;
-        self.undo.push(transaction);
+        let child = self.nodes[self.current].redo_child?;
+        let node = &self.nodes[child];
+        node.transaction.replay(document);
+        self.current = child;
         self.open = false;
-        Some(position)
+        Some(node.transaction.after)
+    }
+
+    /// Step `count` states back in time — `g-` — whichever branch they are on.
+    pub fn earlier(&mut self, document: &mut Document, count: usize) -> Option<Position> {
+        let target = self.current.saturating_sub(count.max(1));
+        (target != self.current).then(|| self.travel(document, target))
+    }
+
+    /// Step `count` states forward in time — `g+`.
+    pub fn later(&mut self, document: &mut Document, count: usize) -> Option<Position> {
+        let target = (self.current + count.max(1)).min(self.nodes.len() - 1);
+        (target != self.current).then(|| self.travel(document, target))
+    }
+
+    /// Move the document to the state of `target`, undoing up to the branch
+    /// point the two states share and redoing down from it.
+    fn travel(&mut self, document: &mut Document, target: usize) -> Position {
+        let ancestors = |mut node: usize| {
+            let mut chain = vec![node];
+            while node != 0 {
+                node = self.nodes[node].parent;
+                chain.push(node);
+            }
+            chain
+        };
+        let from_current = ancestors(self.current);
+        let from_target = ancestors(target);
+        let common = *from_current
+            .iter()
+            .find(|node| from_target.contains(node))
+            .unwrap_or(&0);
+
+        let mut position = self.nodes[self.current].transaction.after;
+        for &node in from_current.iter().take_while(|node| **node != common) {
+            self.nodes[node].transaction.revert(document);
+            position = self.nodes[node].transaction.before;
+        }
+        let downward: Vec<usize> = from_target
+            .iter()
+            .take_while(|node| **node != common)
+            .copied()
+            .collect();
+        for &node in downward.iter().rev() {
+            self.nodes[node].transaction.replay(document);
+            let parent = self.nodes[node].parent;
+            self.nodes[parent].redo_child = Some(node);
+            position = self.nodes[node].transaction.after;
+        }
+        self.current = target;
+        self.open = false;
+        position
+    }
+
+    /// Remember that the document now matches the file on disk.
+    pub fn mark_saved(&mut self) {
+        self.saved = Some(self.current);
+        self.open = false;
+    }
+
+    /// Whether the document is in the state that was last saved.
+    #[must_use]
+    pub fn is_saved(&self) -> bool {
+        self.saved == Some(self.current)
+    }
+
+    /// Change how many states are kept.
+    pub fn set_limit(&mut self, limit: usize) {
+        self.limit = limit.max(1);
+        self.prune();
+    }
+
+    /// Drop the oldest states once there are too many.
+    ///
+    /// Pruning a tree by age would cut branches in half, so instead the
+    /// history collapses to the straight line of states leading to the current
+    /// one, keeping the newest `limit` of them; the state just before them
+    /// becomes the new root. It runs rarely — only once the tree has grown to
+    /// twice the limit — so the copying is amortised away.
+    fn prune(&mut self) {
+        if self.nodes.len() <= self.limit.saturating_mul(2) {
+            return;
+        }
+        let mut line = vec![self.current];
+        let mut node = self.current;
+        while node != 0 {
+            node = self.nodes[node].parent;
+            line.push(node);
+        }
+        line.reverse();
+        let keep = line.len().min(self.limit + 1);
+        let kept = &line[line.len() - keep..];
+
+        let mut nodes = Vec::with_capacity(kept.len());
+        for (index, old) in kept.iter().enumerate() {
+            let mut copy = self.nodes[*old].clone();
+            copy.parent = index.saturating_sub(1);
+            copy.redo_child = (index + 1 < kept.len()).then_some(index + 1);
+            if index == 0 {
+                copy.transaction = Transaction::default();
+            }
+            nodes.push(copy);
+        }
+        self.saved = self
+            .saved
+            .and_then(|saved| kept.iter().position(|old| *old == saved));
+        self.current = nodes.len() - 1;
+        self.nodes = nodes;
+    }
+
+    /// The history in a form that can be written to disk.
+    #[must_use]
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            nodes: self.nodes.clone(),
+            current: self.current,
+        }
+    }
+
+    /// Rebuild a history from disk, taking the current state as the saved
+    /// one — it was written when the file was.
+    #[must_use]
+    pub fn restore(snapshot: Snapshot, limit: usize) -> Option<Self> {
+        let valid = !snapshot.nodes.is_empty()
+            && snapshot.current < snapshot.nodes.len()
+            && snapshot.nodes.iter().enumerate().all(|(index, node)| {
+                node.parent < snapshot.nodes.len() && (index == 0 || node.parent < index)
+            });
+        if !valid {
+            return None;
+        }
+        let mut history = Self::with_limit(limit);
+        history.nodes = snapshot.nodes;
+        history.current = snapshot.current;
+        history.saved = Some(snapshot.current);
+        Some(history)
     }
 }
 
@@ -296,7 +479,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_edit_discards_the_redo_branch() {
+    fn a_new_edit_after_undo_starts_a_branch() {
         let mut document = doc("");
         let mut history = History::default();
         type_text(&mut history, &mut document, 0, "abc");
@@ -304,6 +487,67 @@ mod tests {
 
         type_text(&mut history, &mut document, 0, "x");
         assert!(history.redo(&mut document).is_none());
+
+        // The undone branch is still there, one step back in time, and the
+        // empty text it grew from one step before that.
+        history.earlier(&mut document, 1);
+        assert_eq!(document.text().to_string(), "abc");
+        history.earlier(&mut document, 1);
+        assert_eq!(document.text().to_string(), "");
+        history.later(&mut document, 2);
+        assert_eq!(document.text().to_string(), "x");
+    }
+
+    #[test]
+    fn the_saved_state_is_recognised_after_undo_and_redo() {
+        let mut document = doc("");
+        let mut history = History::default();
+        type_text(&mut history, &mut document, 0, "ab");
+        history.mark_saved();
+        assert!(history.is_saved());
+        history.checkpoint();
+        type_text(&mut history, &mut document, 2, "c");
+        assert!(!history.is_saved());
+        history.undo(&mut document);
+        assert!(history.is_saved());
+    }
+
+    #[test]
+    fn typing_after_a_save_starts_a_new_step() {
+        let mut document = doc("");
+        let mut history = History::default();
+        type_text(&mut history, &mut document, 0, "ab");
+        history.mark_saved();
+        type_text(&mut history, &mut document, 2, "cd");
+        history.undo(&mut document);
+        assert_eq!(document.text().to_string(), "ab");
+    }
+
+    #[test]
+    fn pruning_keeps_the_newest_states() {
+        let mut document = doc("");
+        let mut history = History::with_limit(3);
+        for index in 0..10 {
+            history.checkpoint();
+            type_text(&mut history, &mut document, index, "x");
+        }
+        let mut steps = 0;
+        while history.undo(&mut document).is_some() {
+            steps += 1;
+        }
+        assert!(steps >= 3, "kept {steps}");
+        assert!(steps <= 6, "kept {steps}");
+    }
+
+    #[test]
+    fn a_snapshot_round_trips() {
+        let mut document = doc("");
+        let mut history = History::default();
+        type_text(&mut history, &mut document, 0, "hey");
+        let restored = History::restore(history.snapshot(), 100).expect("valid snapshot");
+        let mut restored = restored;
+        restored.undo(&mut document);
+        assert_eq!(document.text().to_string(), "");
     }
 
     #[test]
@@ -346,11 +590,10 @@ mod tests {
         document.remove(1, 2);
         assert_eq!(document.text().to_string(), "abc");
 
-        history.undo.push(Transaction {
-            changes: vec![Change::deletion(3, "X"), Change::deletion(1, "X")],
-            before: Position::ZERO,
-            after: Position::ZERO,
-        });
+        history.begin_group();
+        history.record(Change::deletion(3, "X"), Position::ZERO, Position::ZERO);
+        history.record(Change::deletion(1, "X"), Position::ZERO, Position::ZERO);
+        history.end_group();
 
         history.undo(&mut document);
         assert_eq!(document.text().to_string(), "aXbXc");
