@@ -54,13 +54,14 @@ impl HighlightCache {
     /// The language in use, if any.
     #[must_use]
     pub fn language(&self) -> Option<&'static super::Language> {
-        self.highlighter.map(|h| h.language)
+        self.highlighter.map(|h| &h.language)
     }
 
     /// Language name for the status bar.
     #[must_use]
     pub fn language_name(&self) -> &'static str {
-        self.highlighter.map_or("plain", |h| h.language.name)
+        self.highlighter
+            .map_or("plain", |h| h.language.name.as_str())
     }
 
     /// Forget the state of every line after `line`.

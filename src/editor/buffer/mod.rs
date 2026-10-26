@@ -47,7 +47,10 @@ impl Buffer {
     /// Wrap a document in a fresh buffer.
     #[must_use]
     pub fn new(document: Document) -> Self {
-        let syntax = HighlightCache::new(document.path().and_then(syntax::detect));
+        let syntax = HighlightCache::new(syntax::detect_document(
+            document.path(),
+            &document.line_string(0),
+        ));
         Self {
             document,
             history: History::default(),
@@ -64,8 +67,10 @@ impl Buffer {
 
     /// Re-run language detection, after the file has been renamed or reloaded.
     pub fn detect_language(&mut self) {
-        self.syntax
-            .set_language(self.document.path().and_then(syntax::detect));
+        self.syntax.set_language(syntax::detect_document(
+            self.document.path(),
+            &self.document.line_string(0),
+        ));
     }
 
     /// Write the buffer to its file and remember that state as the saved one.

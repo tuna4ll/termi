@@ -367,7 +367,10 @@ fn set_option(app: &mut App, key: &str, value: &str) {
             } else if let Some(language) = crate::syntax::by_name(value) {
                 app.buffer_mut().syntax.set_language(Some(language));
             } else {
-                return app.error(format!("unknown language: {value}"));
+                return app.error(format!(
+                    "unknown language: {value} (known: {})",
+                    crate::syntax::names().join(", ")
+                ));
             }
         }
         "tabs" | "show_tabs" => app.config.show_tabs = boolean(),

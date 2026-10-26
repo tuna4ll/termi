@@ -16,6 +16,7 @@
 
 use regex::Regex;
 
+use super::script::{CustomHighlight, Script};
 use super::{Highlight, HighlightKind, Language};
 
 /// What a line inherits from the lines above it.
@@ -27,16 +28,29 @@ pub enum BlockState {
     /// Inside a block comment, `depth` levels deep. Depth is only ever greater
     /// than one for languages with nested block comments.
     InBlockComment(u16),
+    /// Whatever a script's own `highlight` function carries between lines.
+    Custom(i64),
 }
 
 /// A compiled language.
 pub struct Highlighter {
     /// The language this highlighter was built from.
-    pub language: &'static Language,
+    pub language: Language,
     /// The combined alternation; capture group `n + 1` corresponds to `kinds[n]`.
     regex: Regex,
     /// Kind produced by each capture group.
     kinds: Vec<Rule>,
+    /// The script's own highlighter, which replaces the regex when present.
+    custom: Option<CustomHighlight>,
+}
+
+impl std::fmt::Debug for Highlighter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Highlighter")
+            .field("language", &self.language.name)
+            .field("custom", &self.custom.is_some())
+            .finish_non_exhaustive()
+    }
 }
 
 /// What a capture group means.
@@ -57,14 +71,13 @@ enum Rule {
 }
 
 impl Highlighter {
-    /// Compile the alternation for `language`.
+    /// Compile the alternation for a script's language.
     ///
-    /// # Panics
-    /// Panics if a built-in language definition contains an invalid pattern,
-    /// which is a programming error rather than a runtime condition.
-    #[must_use]
-    pub fn new(language: &&'static Language) -> Self {
-        let language: &'static Language = language;
+    /// # Errors
+    /// Returns a message naming the script when one of its patterns is not a
+    /// valid regular expression.
+    pub fn new(script: Script) -> Result<Self, String> {
+        let Script { language, custom } = script;
         let mut alternatives = Vec::new();
         let mut kinds = Vec::new();
 
@@ -74,16 +87,20 @@ impl Highlighter {
         // The block-comment opener has to come first because it can be a prefix
         // of another rule — Python's `"""` also matches the string rule, and the
         // docstring reading is the right one.
-        if let Some((open, _)) = language.block_comment {
+        if let Some((open, _)) = &language.block_comment {
             alternatives.push(regex::escape(open));
             kinds.push(Rule::BlockStart);
         }
         // Language-specific rules then win over everything generic.
-        for (pattern, kind) in language.extra_rules {
-            alternatives.push((*pattern).to_string());
+        for (pattern, kind) in &language.extra_rules {
+            // Each rule is checked alone first, so a mistake is reported
+            // against the rule rather than the whole alternation.
+            Regex::new(pattern)
+                .map_err(|error| format!("{}: rule {pattern:?}: {error}", language.origin))?;
+            alternatives.push(pattern.clone());
             kinds.push(Rule::Fixed(*kind));
         }
-        if let Some(prefix) = language.line_comment {
+        if let Some(prefix) = &language.line_comment {
             alternatives.push(format!("{}.*", regex::escape(prefix)));
             kinds.push(Rule::Fixed(HighlightKind::Comment));
         }
@@ -117,11 +134,13 @@ impl Highlighter {
             .collect::<Vec<_>>()
             .join("|");
 
-        Self {
+        let regex = Regex::new(&source).map_err(|error| format!("{}: {error}", language.origin))?;
+        Ok(Self {
             language,
-            regex: Regex::new(&source).expect("built-in language patterns are valid"),
+            regex,
             kinds,
-        }
+            custom,
+        })
     }
 
     /// Highlight one line, given the state left behind by the previous one.
@@ -130,6 +149,16 @@ impl Highlighter {
     /// starts in.
     #[must_use]
     pub fn highlight_line(&self, line: &str, state: BlockState) -> (Vec<Highlight>, BlockState) {
+        if let Some(custom) = &self.custom {
+            let carried = match state {
+                BlockState::Custom(value) => value,
+                _ => 0,
+            };
+            return match custom.call(line, carried) {
+                Some((spans, next)) => (self.to_char_spans(line, spans), BlockState::Custom(next)),
+                None => (Vec::new(), BlockState::Custom(carried)),
+            };
+        }
         let mut spans: Vec<(usize, usize, HighlightKind)> = Vec::new();
         let mut state = state;
         let mut position = 0;
@@ -202,13 +231,13 @@ impl Highlighter {
     /// Returns `None` for plain identifiers, which are left unstyled so the
     /// bulk of the text keeps the theme's default colour.
     fn classify(&self, word: &str) -> Option<HighlightKind> {
-        if self.language.keywords.contains(&word) {
+        if self.language.keywords.contains(word) {
             return Some(HighlightKind::Keyword);
         }
-        if self.language.types.contains(&word) {
+        if self.language.types.contains(word) {
             return Some(HighlightKind::Type);
         }
-        if self.language.constants.contains(&word) {
+        if self.language.constants.contains(word) {
             return Some(HighlightKind::Constant);
         }
         // `SCREAMING_CASE` is a constant by convention in every language here,
@@ -230,7 +259,7 @@ impl Highlighter {
     /// Walk a block comment from `from`, returning where it ends and the state
     /// the next line inherits.
     fn scan_block_comment(&self, line: &str, from: usize, depth: u16) -> (usize, BlockState) {
-        let Some((open, close)) = self.language.block_comment else {
+        let Some((open, close)) = &self.language.block_comment else {
             return (line.len(), BlockState::Normal);
         };
         let mut depth = depth;
@@ -238,11 +267,11 @@ impl Highlighter {
 
         while position < line.len() {
             let rest = &line[position..];
-            let next_close = rest.find(close);
+            let next_close = rest.find(close.as_str());
             let next_open = self
                 .language
                 .nested_block_comments
-                .then(|| rest.find(open))
+                .then(|| rest.find(open.as_str()))
                 .flatten();
 
             match (next_open, next_close) {
@@ -480,6 +509,15 @@ mod tests {
         assert_eq!(sketch("diff", "3,4c3,4"), "@@@@@@@");
         assert_eq!(sketch("diff", "< was"), "-----");
         assert_eq!(sketch("diff", "> now"), "+++++");
+    }
+
+    #[test]
+    fn new_languages_read_their_own_shapes() {
+        assert_eq!(sketch("json", r#""key": 1"#), "ffffff.n");
+        assert_eq!(sketch("toml", "[deps]"), "HHHHHH");
+        assert_eq!(sketch("shell", "echo $HOME"), "tttt.CCCCC");
+        assert_eq!(sketch("go", "func f() {}"), "kkkk.fpp.pp");
+        assert_eq!(sketch("sql", "SELECT 1"), "kkkkkk.n");
     }
 
     #[test]

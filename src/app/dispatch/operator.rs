@@ -478,8 +478,11 @@ fn comment_lines(app: &mut App, runs: &[(usize, usize)]) {
         return;
     };
     let tokens = comment::Tokens {
-        line: language.line_comment,
-        block: language.block_comment,
+        line: language.line_comment.as_deref(),
+        block: language
+            .block_comment
+            .as_ref()
+            .map(|(open, close)| (open.as_str(), close.as_str())),
     };
     let document = &app.buffer().document;
     let mut replacements = Vec::new();

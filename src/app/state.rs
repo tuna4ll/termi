@@ -126,7 +126,8 @@ impl App {
         let (theme, theme_error) = Theme::load(&config.theme, &config::themes_dir());
 
         let mut app = Self::assemble(config, theme);
-        if let Some(message) = config_error.or(theme_error) {
+        let script_error = crate::syntax::load_errors().first().cloned();
+        if let Some(message) = config_error.or(theme_error).or(script_error) {
             app.error(message);
         }
         app
