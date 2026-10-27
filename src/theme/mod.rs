@@ -148,6 +148,25 @@ impl Default for Theme {
 }
 
 impl Theme {
+    /// Let the terminal's own background show through: every slot that only
+    /// paints the editor's backdrop gives up its background colour.
+    ///
+    /// Slots that mean something by their background — the selection, the
+    /// caret line, search matches, the status bar, popups — keep theirs, so the
+    /// interface still reads the same over a wallpaper.
+    pub fn make_transparent(&mut self) {
+        for style in [
+            &mut self.text,
+            &mut self.gutter,
+            &mut self.command,
+            &mut self.tab_inactive,
+            &mut self.tree_directory,
+            &mut self.tree_file,
+        ] {
+            style.bg = Some(ratatui::style::Color::Reset);
+        }
+    }
+
     /// Look a built-in theme up by name, falling back to dark.
     ///
     /// Unknown names deliberately do not error: a typo in a config file should
@@ -175,8 +194,29 @@ impl Theme {
         match crate::filesystem::read_file(&path)
             .and_then(|text| Ok(toml::from_str::<custom::CustomTheme>(&text)?))
         {
-            Ok(spec) => (spec.build(name), None),
+            Ok(spec) => {
+                let transparent = spec.transparent.unwrap_or(false);
+                let mut theme = spec.build(name);
+                if transparent {
+                    theme.make_transparent();
+                }
+                (theme, None)
+            }
             Err(error) => (Self::builtin(name), Some(format!("{path:?}: {error}"))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn transparency_clears_only_the_backdrop() {
+        let mut theme = Theme::builtin("dark");
+        let selection = theme.selection;
+        theme.make_transparent();
+        assert_eq!(theme.text.bg, Some(ratatui::style::Color::Reset));
+        assert_eq!(theme.selection, selection);
     }
 }

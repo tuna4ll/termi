@@ -46,8 +46,13 @@ pub enum Command {
     CloseWindow,
     /// `:on[ly]` — close every window except the focused one.
     OnlyWindow,
-    /// `:wq` / `:x` — write and quit.
-    WriteQuit { force: bool },
+    /// `:wq [path]` / `:x [path]` — write and quit.
+    WriteQuit {
+        /// Where to write, when not to the buffer's own file.
+        path: Option<PathBuf>,
+        /// Write a read-only buffer, and quit even with others unsaved.
+        force: bool,
+    },
     /// `:e[!] path` — open a file; `force` discards unsaved changes.
     Edit { path: PathBuf, force: bool },
     /// `:touch path` — create an empty file without overwriting anything.
@@ -64,8 +69,18 @@ pub enum Command {
     Reload,
     /// `:42` — jump to a line.
     GotoLine(usize),
-    /// `:set key value` — change a setting for this session.
-    Set { key: String, value: String },
+    /// `:set key value` — change a setting; `:set!` also saves it to the
+    /// config file.
+    Set {
+        /// The option, as typed.
+        key: String,
+        /// Its new value.
+        value: String,
+        /// Write it to the config file too.
+        persist: bool,
+    },
+    /// `:config` — open the config file; `:config reload` re-reads it.
+    Config { reload: bool },
     /// `:theme name` — switch colour scheme.
     Theme(String),
     /// `:bn` / `:bp` — switch buffers.

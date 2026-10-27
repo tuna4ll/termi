@@ -12,7 +12,10 @@
 //!
 //! **Public API:** [`Config`].
 
-use std::path::PathBuf;
+pub mod persist;
+
+use std::collections::{BTreeMap, HashMap};
+use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
@@ -45,10 +48,74 @@ pub fn data_dir() -> PathBuf {
         .join("termi")
 }
 
+/// The config file itself.
+#[must_use]
+pub fn config_file() -> PathBuf {
+    config_dir().join("config.toml")
+}
+
 /// Directory searched for custom theme files.
 #[must_use]
 pub fn themes_dir() -> PathBuf {
     config_dir().join("themes")
+}
+
+/// Key mappings, one table per mode, from key notation to what the keys do:
+/// an action name, a `:command`, or other keys to type instead.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct KeyTables {
+    /// Mappings for normal mode.
+    pub normal: BTreeMap<String, String>,
+    /// Mappings for insert mode.
+    pub insert: BTreeMap<String, String>,
+    /// Mappings for the three visual modes.
+    pub visual: BTreeMap<String, String>,
+}
+
+/// Settings for every file in one language, under `[languages.<name>]`.
+///
+/// They sit between the global settings and the file's own: a project's
+/// `.editorconfig`, the indentation a file already has, and `:set` still win.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct LanguageConfig {
+    /// Width of a tab stop and of one indentation level.
+    pub tab_width: Option<usize>,
+    /// Indent with spaces rather than tabs.
+    pub expand_tabs: Option<bool>,
+    /// Carry indentation onto new lines.
+    pub auto_indent: Option<bool>,
+    /// Close brackets and quotes as they are typed.
+    pub auto_pairs: Option<bool>,
+    /// Strip trailing whitespace on save.
+    pub trim_trailing_whitespace: Option<bool>,
+    /// End the file with a line break on save.
+    pub insert_final_newline: Option<bool>,
+}
+
+impl LanguageConfig {
+    /// Lay these settings over `config`.
+    pub fn apply(&self, config: &mut Config) {
+        if let Some(width) = self.tab_width {
+            config.tab_width = width.clamp(1, 16);
+        }
+        if let Some(expand) = self.expand_tabs {
+            config.expand_tabs = expand;
+        }
+        if let Some(indent) = self.auto_indent {
+            config.auto_indent = indent;
+        }
+        if let Some(pairs) = self.auto_pairs {
+            config.auto_pairs = pairs;
+        }
+        if let Some(trim) = self.trim_trailing_whitespace {
+            config.trim_trailing_whitespace = trim;
+        }
+        if let Some(newline) = self.insert_final_newline {
+            config.insert_final_newline = newline;
+        }
+    }
 }
 
 /// User settings.
@@ -110,6 +177,16 @@ pub struct Config {
     pub undo_limit: usize,
     /// Keep each file's undo history on disk, so it survives a restart.
     pub persistent_undo: bool,
+    /// Draw no background of its own, so the terminal's — a colour, an image,
+    /// transparency — shows through.
+    pub transparent_background: bool,
+    /// Reopen the files, windows and places of the last session in this
+    /// directory when started without files.
+    pub restore_session: bool,
+    /// Key mappings.
+    pub keys: KeyTables,
+    /// Settings per language, keyed by the language's name.
+    pub languages: HashMap<String, LanguageConfig>,
 }
 
 impl Default for Config {
@@ -138,6 +215,10 @@ impl Default for Config {
             mouse: true,
             undo_limit: 1000,
             persistent_undo: true,
+            transparent_background: false,
+            restore_session: true,
+            keys: KeyTables::default(),
+            languages: HashMap::new(),
         }
     }
 }
@@ -150,7 +231,14 @@ impl Config {
     /// from opening — the user needs an editor to fix it with.
     #[must_use]
     pub fn load() -> (Self, Option<String>) {
-        let path = config_dir().join("config.toml");
+        Self::load_from(&config_file())
+    }
+
+    /// Read a config file from somewhere other than the usual place, as
+    /// `--config` asks.
+    #[must_use]
+    pub fn load_from(path: &Path) -> (Self, Option<String>) {
+        let path = path.to_path_buf();
         if !path.is_file() {
             return (Self::default(), None);
         }
@@ -208,6 +296,31 @@ mod tests {
     fn unknown_keys_are_reported_rather_than_ignored() {
         let error = Config::parse("tab_wdith = 4").expect_err("typo must be rejected");
         assert!(error.to_string().contains("tab_wdith"));
+    }
+
+    #[test]
+    fn key_tables_and_language_sections() {
+        let config = Config::parse(
+            "[keys.normal]\n\"<Space>w\" = \":w\"\n[keys.insert]\njk = \"normal_mode\"\n\n[languages.python]\ntab_width = 2\n",
+        )
+        .expect("valid config");
+        assert_eq!(
+            config.keys.normal.get("<Space>w").map(String::as_str),
+            Some(":w")
+        );
+        assert_eq!(
+            config.keys.insert.get("jk").map(String::as_str),
+            Some("normal_mode")
+        );
+        assert_eq!(config.languages["python"].tab_width, Some(2));
+        assert!(Config::parse("[languages.python]\ntabwidth = 2").is_err());
+    }
+
+    #[test]
+    fn the_example_file_is_a_valid_config() {
+        let config = Config::parse(include_str!("../../config.example.toml"))
+            .expect("config.example.toml must parse");
+        assert_eq!(config.theme, Config::default().theme);
     }
 
     #[test]

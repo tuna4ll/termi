@@ -14,6 +14,7 @@
 
 # "dark", "light", or the stem of a file in <config-dir>/termi/themes/.
 theme = "dark"
+transparent_background = false # let the terminal's background show through
 
 # Indentation.
 tab_width = 4
@@ -46,6 +47,9 @@ system_clipboard = true        # false uses an internal register instead
 swap_files = true              # keep unsaved changes for :recover after a crash
 large_file_mb = 16             # bigger files open without highlighting
 
+# Sessions: reopen this directory's files and windows when started bare.
+restore_session = true
+
 # Undo.
 undo_limit = 1000              # states kept per buffer
 persistent_undo = true         # keep each file's undo history across restarts
@@ -55,3 +59,25 @@ persistent_undo = true         # keep each file's undo history across restarts
 # itself; most terminals still offer that under Shift, but set this to false to
 # leave the mouse alone entirely.
 mouse = true
+
+# Key mappings, one table per mode: normal, insert and visual. Keys are written
+# the way the help writes them — <C-s>, <A-x>, <Space>f, <CR>, jk — and map to
+# an action name (:help lists them), a :command, or other keys to type.
+#
+# [keys.normal]
+# "<Space>f" = "file_picker"
+# "<Space>w" = ":w"
+# "<C-o>" = "jump_back"
+#
+# [keys.insert]
+# jk = "normal_mode"
+
+# Settings for one language, keyed by the name the status bar shows. The
+# file's own .editorconfig and indentation still win over these.
+#
+# [languages.python]
+# tab_width = 4
+# trim_trailing_whitespace = true
+#
+# [languages.go]
+# expand_tabs = false

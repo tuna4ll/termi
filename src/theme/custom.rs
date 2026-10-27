@@ -78,6 +78,8 @@ pub struct CustomTheme {
     pub name: Option<String>,
     /// `"dark"` or `"light"`; defaults to dark.
     pub base: Option<String>,
+    /// Leave the background to the terminal.
+    pub transparent: Option<bool>,
     /// Slot name to overrides. Unknown slot names are ignored rather than
     /// rejected, so a theme written for a newer version still loads.
     #[serde(flatten)]

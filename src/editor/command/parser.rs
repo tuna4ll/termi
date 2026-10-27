@@ -51,7 +51,10 @@ pub fn parse(input: &str) -> Result<Command, String> {
         "recover" | "rec" => Ok(Command::Recover),
         "dropswap" => Ok(Command::DropSwap),
         "q" | "quit" => Ok(Command::Quit { force }),
-        "wq" | "x" => Ok(Command::WriteQuit { force }),
+        "wq" | "x" | "xit" => Ok(Command::WriteQuit {
+            path: argument.map(PathBuf::from),
+            force,
+        }),
         "wa" | "wall" => Ok(Command::WriteAll),
         "qa" | "qall" | "quitall" => Ok(Command::QuitAll { force }),
         "wqa" | "wqall" | "xa" | "xall" => Ok(Command::WriteQuitAll),
@@ -86,7 +89,12 @@ pub fn parse(input: &str) -> Result<Command, String> {
             || Err("usage: :theme <name>".to_string()),
             |name| Ok(Command::Theme(name)),
         ),
-        "set" => parse_set(rest),
+        "set" | "se" => parse_set(rest, force),
+        "config" => match rest {
+            "" | "edit" => Ok(Command::Config { reload: false }),
+            "reload" => Ok(Command::Config { reload: true }),
+            _ => Err("usage: :config [reload]".to_string()),
+        },
         "earlier" | "ea" => count_argument(rest).map(Command::Earlier),
         "later" | "lat" => count_argument(rest).map(Command::Later),
         "help" | "h" => Ok(Command::Help),
@@ -116,7 +124,7 @@ fn required_path(argument: Option<String>, command: &str) -> Result<PathBuf, Str
 }
 
 /// `set key value`, where a missing value means "turn it on".
-fn parse_set(rest: &str) -> Result<Command, String> {
+fn parse_set(rest: &str, persist: bool) -> Result<Command, String> {
     // `:set ts=2` and `:set ts 2` say the same thing.
     let rest = rest.replacen('=', " ", 1);
     let mut parts = rest.split_whitespace();
@@ -132,6 +140,7 @@ fn parse_set(rest: &str) -> Result<Command, String> {
     Ok(Command::Set {
         key: key.to_string(),
         value: parts.next().unwrap_or(default).to_string(),
+        persist,
     })
 }
 
@@ -213,7 +222,8 @@ mod tests {
             parse("set ff=dos"),
             Ok(Command::Set {
                 key: "ff".to_string(),
-                value: "dos".to_string()
+                value: "dos".to_string(),
+                persist: false
             })
         );
     }
@@ -315,21 +325,24 @@ mod tests {
             parse("set tab_width 2"),
             Ok(Command::Set {
                 key: "tab_width".to_string(),
-                value: "2".to_string()
+                value: "2".to_string(),
+                persist: false
             })
         );
         assert_eq!(
             parse("set number"),
             Ok(Command::Set {
                 key: "number".to_string(),
-                value: "true".to_string()
+                value: "true".to_string(),
+                persist: false
             })
         );
         assert_eq!(
             parse("set nonumber"),
             Ok(Command::Set {
                 key: "number".to_string(),
-                value: "false".to_string()
+                value: "false".to_string(),
+                persist: false
             })
         );
     }
@@ -372,6 +385,11 @@ mod tests {
     #[test]
     fn set_is_not_mistaken_for_a_substitution() {
         assert!(matches!(parse("set number"), Ok(Command::Set { .. })));
+        assert!(matches!(
+            parse("set! ts=2"),
+            Ok(Command::Set { persist: true, .. })
+        ));
+        assert_eq!(parse("config reload"), Ok(Command::Config { reload: true }));
     }
 
     #[test]

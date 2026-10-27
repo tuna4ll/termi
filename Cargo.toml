@@ -30,6 +30,9 @@ regex = "1.13"
 # Configuration and theming.
 serde = { version = "1", features = ["derive"] }
 toml = "1.1"
+# `:set!` rewrites the config file in place, keeping the user's comments and
+# layout, which plain `toml` cannot do.
+toml_edit = "0.23"
 dirs = "6"
 
 # Platform integrations.

@@ -92,6 +92,31 @@ impl Windows {
         }
     }
 
+    /// Rebuild a set of windows from a saved arrangement, as session restore
+    /// does. Window `n` of `windows` is the one `Node::Leaf(n)` refers to.
+    ///
+    /// Returns `None` when the arrangement names a window that is not there,
+    /// or leaves one out, or when the focus is not one of them.
+    #[must_use]
+    pub fn from_parts(windows: Vec<Window>, root: Node, focus: WindowId) -> Option<Self> {
+        let mut leaves = Vec::new();
+        collect(&root, &mut leaves);
+        let mut sorted = leaves.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        if sorted.len() != leaves.len()
+            || sorted != (0..windows.len()).collect::<Vec<_>>()
+            || focus >= windows.len()
+        {
+            return None;
+        }
+        Some(Self {
+            slots: windows.into_iter().map(Some).collect(),
+            root,
+            focus,
+        })
+    }
+
     /// The arrangement, for the renderer to walk.
     #[must_use]
     pub const fn root(&self) -> &Node {

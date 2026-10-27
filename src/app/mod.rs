@@ -12,6 +12,7 @@
 pub mod commands;
 pub mod dispatch;
 pub mod mode;
+pub mod session;
 pub mod state;
 
 use std::path::PathBuf;
@@ -88,6 +89,11 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
             _ => {}
         }
     }
+    if app.config.restore_session && !app.startup.no_session && !app.startup.clean {
+        // A session that cannot be written is not worth an error on the way
+        // out; the files themselves are safe.
+        let _ = session::save(app);
+    }
     app.remove_swaps();
     Ok(())
 }
@@ -129,9 +135,19 @@ fn sudo_write(app: &mut App, tui: &mut Tui, job: state::SudoWrite) -> Result<()>
 
 /// Turn one key into an action and carry it out.
 fn handle_key(app: &mut App, input: &mut Input, key: crossterm::event::KeyEvent) -> Result<()> {
+    if std::mem::take(&mut app.mappings_changed) {
+        input.set_mappings(app.mappings.clone());
+    }
     input.recording = app.macro_recording.is_some();
     let action = input.handle(key, app.mode);
     dispatch::apply(app, action)?;
+    // A mapping, or a sequence that turned out not to be one, can leave keys
+    // to handle after the first.
+    while let Some((queued, unmapped)) = input.take_replay() {
+        input.recording = app.macro_recording.is_some();
+        let action = input.handle_queued(queued, unmapped, app.mode);
+        dispatch::apply(app, action)?;
+    }
     app.showcmd = input.pending_keys();
     Ok(())
 }

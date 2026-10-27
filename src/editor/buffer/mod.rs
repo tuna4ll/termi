@@ -182,10 +182,15 @@ impl Buffer {
         self.history.checkpoint();
     }
 
-    /// The settings in force for this file.
+    /// The settings in force for this file: the global config, then its
+    /// language's section, then its own overrides.
     #[must_use]
     pub fn config(&self, global: &Config) -> Config {
-        self.options.apply(global)
+        let mut config = global.clone();
+        if let Some(language) = global.languages.get(self.syntax.language_name()) {
+            language.apply(&mut config);
+        }
+        self.options.apply(&config)
     }
 
     fn after_save(&mut self, undo_dir: Option<&Path>) {

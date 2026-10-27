@@ -2,7 +2,10 @@
 
 pub mod grammar;
 pub mod keymap;
+pub mod mappings;
 pub mod notation;
+
+use std::collections::VecDeque;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent};
 
@@ -370,6 +373,12 @@ pub enum Action {
 
 #[derive(Debug, Default)]
 pub struct Input {
+    /// The user's key mappings.
+    mappings: mappings::Mappings,
+    /// Keys that may be the start of a mapping, held until it is clear.
+    mapped: Vec<KeyEvent>,
+    /// Keys to handle after this one, and whether to skip mappings for them.
+    replay: VecDeque<(KeyEvent, bool)>,
     pending: Option<Pending>,
     /// Keys of a normal or visual mode command still being typed.
     keys: Vec<KeyEvent>,
@@ -380,8 +389,81 @@ pub struct Input {
 }
 
 impl Input {
+    /// Use these mappings from now on.
+    pub fn set_mappings(&mut self, mappings: mappings::Mappings) {
+        self.mappings = mappings;
+        self.mapped.clear();
+    }
+
+    /// The next key a mapping or a broken-off sequence left to be handled, to
+    /// be fed back in through [`Input::handle_queued`].
+    pub fn take_replay(&mut self) -> Option<(KeyEvent, bool)> {
+        self.replay.pop_front()
+    }
+
+    /// Handle a key from [`Input::take_replay`].
+    pub fn handle_queued(&mut self, key: KeyEvent, unmapped: bool, mode: Mode) -> Action {
+        if unmapped {
+            self.handle_unmapped(normalise_alt_gr(key), mode)
+        } else {
+            self.handle(key, mode)
+        }
+    }
+
     pub fn handle(&mut self, key: KeyEvent, mode: Mode) -> Action {
         let key = normalise_alt_gr(key);
+        // Mappings apply between commands, never in the middle of one: `d`
+        // followed by a mapped key is still `d` and a motion.
+        if self.pending.is_none()
+            && self.keys.is_empty()
+            && let Some(table) = self.mappings.for_mode(mode)
+        {
+            self.mapped.push(key);
+            let waiting = table.iter().any(|(sequence, _)| {
+                sequence.len() > self.mapped.len() && mappings::starts_with(sequence, &self.mapped)
+            });
+            if waiting {
+                return Action::None;
+            }
+            let held = std::mem::take(&mut self.mapped);
+            // The longest held prefix that is a mapping fires; whatever came
+            // after it is looked at afresh.
+            for length in (1..=held.len()).rev() {
+                let found = table.iter().find(|(sequence, _)| {
+                    sequence.len() == length && mappings::starts_with(&held, sequence)
+                });
+                if let Some((_, binding)) = found {
+                    let binding = binding.clone();
+                    for key in held[length..].iter().rev() {
+                        self.replay.push_front((*key, false));
+                    }
+                    return self.fire(binding, mode);
+                }
+            }
+            for key in held[1..].iter().rev() {
+                self.replay.push_front((*key, false));
+            }
+            return self.handle_unmapped(held[0], mode);
+        }
+        self.handle_unmapped(key, mode)
+    }
+
+    fn fire(&mut self, binding: mappings::Binding, mode: Mode) -> Action {
+        match binding {
+            mappings::Binding::Action(action) => action,
+            mappings::Binding::Keys(keys) => {
+                for key in keys.into_iter().rev() {
+                    self.replay.push_front((key, true));
+                }
+                match self.replay.pop_front() {
+                    Some((key, _)) => self.handle_unmapped(key, mode),
+                    None => Action::None,
+                }
+            }
+        }
+    }
+
+    fn handle_unmapped(&mut self, key: KeyEvent, mode: Mode) -> Action {
         if let Some(prefix) = self.pending.take() {
             return keymap::pending(prefix, key);
         }
@@ -455,8 +537,9 @@ impl Input {
     /// The keys of a command still being typed, for the status bar.
     #[must_use]
     pub fn pending_keys(&self) -> String {
-        self.keys
+        self.mapped
             .iter()
+            .chain(&self.keys)
             .filter_map(|key| match key.code {
                 KeyCode::Char(ch) => Some(ch),
                 _ => None,
@@ -467,6 +550,7 @@ impl Input {
     pub fn handle_mouse(&mut self, event: MouseEvent) -> Action {
         self.pending = None;
         self.keys.clear();
+        self.mapped.clear();
         keymap::mouse(event)
     }
 }
@@ -710,6 +794,57 @@ mod tests {
             input.handle(plain('A'), Mode::Tree),
             Action::TreeCreate { directory: true }
         );
+    }
+
+    fn mapped(entries: &[(&str, &str, &str)]) -> Input {
+        let mut tables = crate::config::KeyTables::default();
+        for (mode, keys, value) in entries {
+            let table = match *mode {
+                "normal" => &mut tables.normal,
+                "insert" => &mut tables.insert,
+                _ => &mut tables.visual,
+            };
+            table.insert((*keys).to_string(), (*value).to_string());
+        }
+        let (mappings, errors) = mappings::Mappings::compile(&tables);
+        assert!(errors.is_empty(), "{errors:?}");
+        let mut input = Input::default();
+        input.set_mappings(mappings);
+        input
+    }
+
+    #[test]
+    fn a_mapping_waits_for_its_whole_sequence() {
+        let mut input = mapped(&[("insert", "jk", "normal_mode")]);
+        assert_eq!(input.handle(plain('j'), Mode::Insert), Action::None);
+        assert_eq!(
+            input.handle(plain('k'), Mode::Insert),
+            Action::EnterMode(Mode::Normal)
+        );
+    }
+
+    #[test]
+    fn a_broken_off_sequence_types_its_keys_after_all() {
+        let mut input = mapped(&[("insert", "jk", "normal_mode")]);
+        assert_eq!(input.handle(plain('j'), Mode::Insert), Action::None);
+        assert_eq!(input.handle(plain('x'), Mode::Insert), Action::Insert('j'));
+        let (key, unmapped) = input.take_replay().expect("x is replayed");
+        assert_eq!(
+            input.handle_queued(key, unmapped, Mode::Insert),
+            Action::Insert('x')
+        );
+    }
+
+    #[test]
+    fn a_mapping_to_keys_does_not_map_them_again() {
+        let mut input = mapped(&[("normal", "x", "dd"), ("normal", "d", "x")]);
+        assert_eq!(input.handle(plain('x'), Mode::Normal), Action::None);
+        let (key, unmapped) = input.take_replay().expect("second d queued");
+        assert!(unmapped);
+        assert!(matches!(
+            input.handle_queued(key, unmapped, Mode::Normal),
+            Action::Operate { .. }
+        ));
     }
 
     #[test]

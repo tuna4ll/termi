@@ -47,6 +47,20 @@ pub struct SudoWrite {
     pub bytes: Vec<u8>,
 }
 
+/// What the command line asked for at startup that changes how the editor
+/// sets itself up.
+#[derive(Debug, Clone, Default)]
+pub struct Startup {
+    /// Read this config file instead of the usual one.
+    pub config_path: Option<PathBuf>,
+    /// Ignore the config file and any saved session.
+    pub clean: bool,
+    /// Do not restore or save a session.
+    pub no_session: bool,
+    /// Open every file read-only.
+    pub readonly: bool,
+}
+
 /// How often a modified buffer's swap file is rewritten at most.
 const SWAP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -105,6 +119,12 @@ pub struct App {
     pub showcmd: String,
     /// A write waiting to be run through `sudo`.
     pub pending_sudo: Option<SudoWrite>,
+    /// The user's key mappings.
+    pub mappings: crate::input::mappings::Mappings,
+    /// Whether the mappings changed since the input handler last took them.
+    pub mappings_changed: bool,
+    /// How the editor was started.
+    pub startup: Startup,
     /// Incremental search state, kept across searches so `n` can repeat one.
     pub search: Search,
     /// File browser, built on first use and kept afterwards so the expanded
@@ -139,15 +159,63 @@ impl App {
     /// the editor is what the user needs in order to fix them.
     #[must_use]
     pub fn new() -> Self {
-        let (config, config_error) = Config::load();
-        let (theme, theme_error) = Theme::load(&config.theme, &config::themes_dir());
+        Self::start(Startup::default())
+    }
+
+    /// Start the way the command line asked.
+    #[must_use]
+    pub fn start(startup: Startup) -> Self {
+        let (config, config_error) = if startup.clean {
+            (Config::default(), None)
+        } else {
+            match &startup.config_path {
+                Some(path) => Config::load_from(path),
+                None => Config::load(),
+            }
+        };
+        let (theme, theme_error) = load_theme(&config);
 
         let mut app = Self::assemble(config, theme);
+        app.startup = startup;
+        let mapping_error = app.compile_mappings();
         let script_error = crate::syntax::load_errors().first().cloned();
-        if let Some(message) = config_error.or(theme_error).or(script_error) {
+        if let Some(message) = config_error
+            .or(theme_error)
+            .or(mapping_error)
+            .or(script_error)
+        {
             app.error(message);
         }
         app
+    }
+
+    /// Compile the key mappings from the config, returning the first problem.
+    fn compile_mappings(&mut self) -> Option<String> {
+        let (mappings, errors) = crate::input::mappings::Mappings::compile(&self.config.keys);
+        self.mappings = mappings;
+        self.mappings_changed = true;
+        errors.into_iter().next()
+    }
+
+    /// Read the config file again and apply it: settings, theme and key
+    /// mappings. Open buffers keep their own settings.
+    pub fn reload_config(&mut self) {
+        let (config, error) = match &self.startup.config_path {
+            Some(path) => Config::load_from(path),
+            None => Config::load(),
+        };
+        if let Some(error) = error {
+            self.error(error);
+            return;
+        }
+        self.config = config;
+        let (theme, theme_error) = load_theme(&self.config);
+        self.theme = theme;
+        if let Some(error) = theme_error.or_else(|| self.compile_mappings()) {
+            self.error(error);
+            return;
+        }
+        self.info("config reloaded");
     }
 
     /// Start from `config` without reading anything from disk.
@@ -157,8 +225,13 @@ impl App {
     #[cfg(test)]
     #[must_use]
     pub fn with_config(config: Config) -> Self {
-        let theme = Theme::builtin(&config.theme);
-        Self::assemble(config, theme)
+        let mut theme = Theme::builtin(&config.theme);
+        if config.transparent_background {
+            theme.make_transparent();
+        }
+        let mut app = Self::assemble(config, theme);
+        app.compile_mappings();
+        app
     }
 
     fn assemble(config: Config, theme: Theme) -> Self {
@@ -183,6 +256,9 @@ impl App {
             insert_group_open: false,
             showcmd: String::new(),
             pending_sudo: None,
+            mappings: crate::input::mappings::Mappings::default(),
+            mappings_changed: false,
+            startup: Startup::default(),
             search: Search::default(),
             tree: None,
             tree_selected: 0,
@@ -418,6 +494,9 @@ impl App {
         }
         let existed = path.exists();
         let mut buffer = Buffer::new(Document::open(path.clone())?);
+        if self.startup.readonly {
+            buffer.document.set_readonly(true);
+        }
         let limit = self.config.large_file_mb.saturating_mul(1 << 20);
         buffer.large = std::fs::metadata(&path).is_ok_and(|meta| meta.len() > limit);
         self.configure_buffer(&mut buffer, existed);
@@ -898,6 +977,15 @@ impl App {
         let document = &self.buffers[index].document;
         document.path().is_none() && !document.is_dirty() && document.len_chars() == 0
     }
+}
+
+/// Load the configured theme, without its background if the config asks.
+pub fn load_theme(config: &Config) -> (Theme, Option<String>) {
+    let (mut theme, error) = Theme::load(&config.theme, &config::themes_dir());
+    if config.transparent_background {
+        theme.make_transparent();
+    }
+    (theme, error)
 }
 
 /// "12 minutes", "3 hours": how long ago something happened, roughly.

@@ -53,7 +53,30 @@ COMMANDS  :w [path]  :q[!]  :wq  :wa  :qa[!]  :wqa  :e[!] path
           :set <option> [value]     :theme <name>     :<line>
           :w! write read-only   :sudow write with sudo   :recover :dropswap
           :set ff=unix|dos   :set fenc=utf-8|utf-8-bom|latin1   :set ro
+          :set! saves a setting to the config file   :config [reload]
+          :set transparent   leaves the background to the terminal
           :%s/pattern/replacement/g";
+
+/// The key reference, with the actions a `[keys]` table can name.
+fn help_text() -> String {
+    let mut text = HELP.to_string();
+    text.push_str(
+        "\n\nMAPPINGS  [keys.normal] [keys.insert] [keys.visual] in the config map key\n",
+    );
+    text.push_str("          notation (<C-s>, <Space>f, jk) to a :command, keys, or one of:\n");
+    let mut line = String::from("         ");
+    for name in crate::input::mappings::ACTION_NAMES {
+        if line.len() + name.len() + 1 > 78 {
+            text.push_str(&line);
+            text.push('\n');
+            line = String::from("         ");
+        }
+        line.push(' ');
+        line.push_str(name);
+    }
+    text.push_str(&line);
+    text
+}
 
 pub fn run(app: &mut App, line: &str) {
     if let Some(command) = terminal_command(line) {
@@ -86,8 +109,8 @@ fn execute(app: &mut App, command: Command) {
         Command::Recover => recover(app),
         Command::DropSwap => drop_swap(app),
         Command::Quit { force } => quit(app, force),
-        Command::WriteQuit { force } => {
-            write(app, None, force);
+        Command::WriteQuit { path, force } => {
+            write(app, path, force);
             if !app.status.is_error {
                 quit(app, force);
             }
@@ -118,7 +141,18 @@ fn execute(app: &mut App, command: Command) {
         Command::Move(path) => move_tree_path(app, path, "moved"),
         Command::Reload => reload(app),
         Command::GotoLine(line) => app.move_cursors(Motion::ToLine(line), false, false),
-        Command::Set { key, value } => set_option(app, &key, &value),
+        Command::Set {
+            key,
+            value,
+            persist,
+        } => {
+            set_option(app, &key, &value);
+            if persist && !app.status.is_error {
+                persist_option(app, &key, &value);
+            }
+        }
+        Command::Config { reload: true } => app.reload_config(),
+        Command::Config { reload: false } => open_config(app),
         Command::Theme(name) => set_theme(app, &name),
         Command::CycleBuffer { forward } => app.cycle_buffer(forward),
         Command::Substitute {
@@ -137,7 +171,7 @@ fn execute(app: &mut App, command: Command) {
                 app.info("already at the newest state");
             }
         }
-        Command::Help => app.show_popup("termi", HELP),
+        Command::Help => app.show_popup("termi", help_text()),
         Command::Find => app.open_picker(PickerKind::Files),
         Command::Buffers => app.open_picker(PickerKind::Buffers),
         Command::Commands => app.open_picker(PickerKind::Commands),
@@ -419,7 +453,10 @@ fn reload(app: &mut App) {
 }
 
 fn set_theme(app: &mut App, name: &str) {
-    let (theme, error) = Theme::load(name, &config::themes_dir());
+    let (mut theme, error) = Theme::load(name, &config::themes_dir());
+    if app.config.transparent_background {
+        theme.make_transparent();
+    }
     app.theme = theme;
     app.config.theme = name.to_string();
     match error {
@@ -427,6 +464,82 @@ fn set_theme(app: &mut App, name: &str) {
         None => app.info(format!("theme: {}", app.theme.name)),
     }
 }
+
+/// The name an option has in the config file, and how to write its value
+/// there; `None` for options that only make sense for one session or buffer.
+/// Turns what `:set` was given into a value for the config file.
+type Convert = fn(&str) -> Option<config::persist::Value>;
+
+fn config_key(key: &str) -> Option<(&'static str, Convert)> {
+    use config::persist::Value;
+    let flag = |value: &str| Some(Value::Bool(matches!(value, "true" | "on" | "yes" | "1")));
+    let number = |value: &str| value.parse::<i64>().ok().map(Value::Int);
+    let text = |value: &str| Some(Value::Text(value.to_string()));
+    Some(match key {
+        "number" | "nu" | "line_numbers" => ("line_numbers", flag),
+        "relativenumber" | "rnu" | "relative_line_numbers" => ("relative_line_numbers", flag),
+        "wrap" | "word_wrap" => ("word_wrap", flag),
+        "autoindent" | "ai" | "auto_indent" => ("auto_indent", flag),
+        "autopairs" | "ap" | "auto_pairs" => ("auto_pairs", flag),
+        "expandtab" | "et" | "expand_tabs" => ("expand_tabs", flag),
+        "cursorline" | "cul" | "highlight_current_line" => ("highlight_current_line", flag),
+        "tabs" | "show_tabs" => ("show_tabs", flag),
+        "tabstop" | "ts" | "tab_width" | "shiftwidth" | "sw" => ("tab_width", number),
+        "scrolloff" | "so" => ("scrolloff", number),
+        "trim" | "trim_trailing_whitespace" => ("trim_trailing_whitespace", flag),
+        "finalnewline" | "fixeol" | "insert_final_newline" => ("insert_final_newline", flag),
+        "transparent" | "transparent_background" => ("transparent_background", flag),
+        "theme" => ("theme", text),
+        _ => return None,
+    })
+}
+
+/// `:set!` — write what `:set` just did into the config file.
+fn persist_option(app: &mut App, key: &str, value: &str) {
+    let Some((name, convert)) = config_key(key) else {
+        app.error(format!(
+            "{key} only applies to this session and cannot be saved"
+        ));
+        return;
+    };
+    let Some(converted) = convert(value) else {
+        app.error(format!("{value} is not a value for {name}"));
+        return;
+    };
+    let path = app
+        .startup
+        .config_path
+        .clone()
+        .unwrap_or_else(config::config_file);
+    match config::persist::store(&path, name, converted) {
+        Ok(()) => app.info(format!("{name} = {value}, saved to {}", path.display())),
+        Err(error) => app.error(error.to_string()),
+    }
+}
+
+/// `:config` — open the config file, creating a commented one if there is
+/// none yet.
+fn open_config(app: &mut App) {
+    let path = app
+        .startup
+        .config_path
+        .clone()
+        .unwrap_or_else(config::config_file);
+    if !path.exists() {
+        let created = path
+            .parent()
+            .map_or(Ok(()), std::fs::create_dir_all)
+            .and_then(|()| std::fs::write(&path, CONFIG_TEMPLATE));
+        if let Err(error) = created {
+            app.error(format!("cannot create {}: {error}", path.display()));
+            return;
+        }
+    }
+    edit(app, path, false);
+}
+
+/// What a new config file starts as: every setting, commented out.
+const CONFIG_TEMPLATE: &str = include_str!("../../config.example.toml");
 
 fn set_option(app: &mut App, key: &str, value: &str) {
     let boolean = || matches!(value, "true" | "on" | "yes" | "1");
@@ -491,6 +604,11 @@ fn set_option(app: &mut App, key: &str, value: &str) {
         "ignorecase" | "ic" => app.search.case_sensitive = Some(!boolean()),
         "regex" => app.search.regex = boolean(),
         "theme" => return set_theme(app, value),
+        "transparent" | "transparent_background" => {
+            app.config.transparent_background = boolean();
+            let name = app.config.theme.clone();
+            set_theme(app, &name);
+        }
         other => return app.error(format!("unknown option: {other}")),
     }
     app.info(format!("{key} = {value}"));
