@@ -228,12 +228,13 @@ fn prepare(app: &mut App, panes: &Panes) {
         let App {
             buffers,
             windows,
-            config,
+            config: global,
             ..
         } = &mut *app;
 
         let window = windows.get_mut(*id);
         let index = window.buffer;
+        let config = &buffers[index].config(global);
 
         // A window that did not make the last edit is never told that the text
         // moved underneath it, so its cursors are checked here instead. The
@@ -276,12 +277,13 @@ fn draw_windows(frame: &mut Frame, app: &App, panes: &Panes) -> Option<(u16, u16
             continue;
         }
         let window = app.windows.get(*id);
+        let config = app.buffer_config(window.buffer);
         let view = EditorView {
             buffer: &app.buffers[window.buffer],
             window,
             focused,
             theme: &app.theme,
-            config: &app.config,
+            config: &config,
             // A selection and the search highlight both belong to the window
             // being typed in; painting them everywhere would suggest the other
             // windows were about to act on them too.
@@ -374,6 +376,10 @@ fn status_bar(app: &App) -> StatusBar<'_> {
         position: window.cursor().head,
         line_count: buffer.document.len_lines(),
         line_ending: buffer.document.line_ending(),
+        encoding: Some(buffer.document.encoding())
+            .filter(|encoding| *encoding != crate::filesystem::Encoding::Utf8)
+            .map(crate::filesystem::Encoding::label),
+        readonly: buffer.document.is_readonly(),
         cursor_count: window.cursors().len(),
         selected: selection_ranges(app)
             .iter()

@@ -18,8 +18,19 @@ use crate::editor::window::Axis;
 /// A parsed command line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Command {
-    /// `:w [path]` — write the buffer.
-    Write(Option<PathBuf>),
+    /// `:w[!] [path]` — write the buffer; `force` writes a read-only one.
+    Write {
+        /// Where to write, when not to the buffer's own file.
+        path: Option<PathBuf>,
+        /// Write even though the buffer is read-only.
+        force: bool,
+    },
+    /// `:sudow` — write the buffer through `sudo`.
+    SudoWrite,
+    /// `:recover` — bring back the unsaved text a swap file kept.
+    Recover,
+    /// `:dropswap` — throw away a swap file's unsaved text.
+    DropSwap,
     /// `:q[!]` — close the window, then the buffer, then the editor.
     Quit { force: bool },
     /// `:wa` — write every modified buffer that has a name.

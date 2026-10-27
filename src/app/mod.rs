@@ -43,6 +43,10 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
     let mut watcher = app.config.watch_files.then(Watcher::new).flatten();
 
     while !app.should_quit() {
+        app.write_swaps();
+        if let Some(job) = app.pending_sudo.take() {
+            sudo_write(app, tui, job)?;
+        }
         if let Some(watcher) = watcher.as_mut() {
             watch_open_files(app, watcher);
             watch_open_directories(app, watcher);
@@ -83,6 +87,42 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
             Event::Resize(_, _) => tui.clear()?,
             _ => {}
         }
+    }
+    app.remove_swaps();
+    Ok(())
+}
+
+/// Write a file through `sudo tee`, with the terminal handed back to the
+/// shell so `sudo` can ask for a password.
+fn sudo_write(app: &mut App, tui: &mut Tui, job: state::SudoWrite) -> Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    tui.suspend()?;
+    let outcome = Command::new("sudo")
+        .arg("tee")
+        .arg(&job.path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .and_then(|mut child| {
+            if let Some(mut stdin) = child.stdin.take() {
+                stdin.write_all(&job.bytes)?;
+            }
+            child.wait()
+        });
+    tui.resume()?;
+
+    match outcome {
+        Ok(status) if status.success() => {
+            if let Some(buffer) = app.buffers.get_mut(job.buffer) {
+                buffer.history.mark_saved();
+                buffer.document.set_dirty(false);
+            }
+            app.info(format!("wrote {} with sudo", job.path.display()));
+        }
+        Ok(status) => app.error(format!("sudo tee failed: {status}")),
+        Err(error) => app.error(format!("cannot run sudo: {error}")),
     }
     Ok(())
 }
@@ -170,10 +210,10 @@ fn handle_external_changes(app: &mut App, changed: Vec<PathBuf>) {
 
         // Our own saves fire events too. Comparing content rather than
         // timestamps tells a real external edit from the write we just did.
-        let Ok(on_disk) = crate::filesystem::read_file(&path) else {
+        let Ok(on_disk) = std::fs::read(&path) else {
             continue;
         };
-        if app.buffers[index].document.matches_disk_text(&on_disk) {
+        if app.buffers[index].document.matches_disk(&on_disk) {
             continue;
         }
 

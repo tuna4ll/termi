@@ -35,6 +35,10 @@ pub struct StatusBar<'a> {
     pub line_count: usize,
     /// Line ending the file will be saved with.
     pub line_ending: LineEnding,
+    /// The file's encoding, when it is not plain UTF-8.
+    pub encoding: Option<&'a str>,
+    /// Whether the buffer is read-only.
+    pub readonly: bool,
     /// Number of active cursors; shown only when greater than one.
     pub cursor_count: usize,
     /// Characters covered by the selection; shown only when there is one.
@@ -65,6 +69,9 @@ impl Widget for StatusBar<'_> {
         if self.dirty {
             left.push(Span::styled(" ●", self.theme.status_dirty));
         }
+        if self.readonly {
+            left.push(Span::styled(" [RO]", self.theme.status_dirty));
+        }
         if self.cursor_count > 1 {
             left.push(Span::styled(
                 format!("  {} cursors", self.cursor_count),
@@ -86,13 +93,16 @@ impl Widget for StatusBar<'_> {
 
         let right = Line::from(Span::styled(
             format!(
-                " {}{}  {}  {}:{}  {}% ",
+                " {}{}{}  {}  {}:{}  {}% ",
                 if self.pending.is_empty() {
                     String::new()
                 } else {
                     format!("{}  ", self.pending)
                 },
                 self.language,
+                self.encoding
+                    .map(|encoding| format!("  {encoding}"))
+                    .unwrap_or_default(),
                 self.line_ending.label(),
                 self.position.line + 1,
                 self.position.col + 1,

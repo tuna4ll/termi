@@ -84,6 +84,17 @@ pub struct Config {
     pub watch_files: bool,
     /// Strip trailing whitespace from every line on save.
     pub trim_trailing_whitespace: bool,
+    /// End every file with a line break on save.
+    pub insert_final_newline: bool,
+    /// Work out each file's indentation from its contents when it opens.
+    pub detect_indent: bool,
+    /// Read the `.editorconfig` files a project ships.
+    pub editorconfig: bool,
+    /// Keep unsaved changes in swap files, for recovery after a crash.
+    pub swap_files: bool,
+    /// Files larger than this many megabytes open without highlighting,
+    /// swap files or persistent undo, so they stay quick to edit.
+    pub large_file_mb: u64,
     /// Use the system clipboard for yank and paste. When `false`, an internal
     /// register is used instead.
     pub system_clipboard: bool,
@@ -118,6 +129,11 @@ impl Default for Config {
             show_tabs: true,
             watch_files: true,
             trim_trailing_whitespace: false,
+            insert_final_newline: false,
+            detect_indent: true,
+            editorconfig: true,
+            swap_files: true,
+            large_file_mb: 16,
             system_clipboard: true,
             mouse: true,
             undo_limit: 1000,

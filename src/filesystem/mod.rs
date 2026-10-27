@@ -6,9 +6,12 @@
 //! bare "access denied" is useless in a status bar), and make saving atomic so
 //! that a crash mid-write cannot leave the user with a truncated source file.
 //!
-//! **Public API:** [`read_file`], [`write_file`], [`create_file`],
-//! [`create_directory`], [`tree::Tree`].
+//! **Public API:** [`read_file`], [`read_text`], [`encode`], [`write_file`],
+//! [`write_bytes`], [`is_writable`], [`create_file`], [`create_directory`],
+//! [`Encoding`], [`tree::Tree`], [`editorconfig`], [`swap`].
 
+pub mod editorconfig;
+pub mod swap;
 pub mod tree;
 pub mod watcher;
 
@@ -16,6 +19,123 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
+
+/// How a file's text is stored as bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Encoding {
+    /// UTF-8, the default for every new file.
+    #[default]
+    Utf8,
+    /// UTF-8 with a byte-order mark, kept when a file already has one.
+    Utf8Bom,
+    /// ISO-8859-1: one byte per character. Every byte sequence is valid
+    /// Latin-1, which makes it the fallback that opens anything that is not
+    /// UTF-8 without losing a byte on the way back out.
+    Latin1,
+}
+
+impl Encoding {
+    /// The name shown in the status bar and accepted by `:set encoding`.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Utf8 => "utf-8",
+            Self::Utf8Bom => "utf-8-bom",
+            Self::Latin1 => "latin1",
+        }
+    }
+
+    /// The encoding a name refers to, as `:set encoding` and `.editorconfig`
+    /// spell them.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().replace('_', "-").as_str() {
+            "utf-8" | "utf8" => Some(Self::Utf8),
+            "utf-8-bom" | "utf8-bom" => Some(Self::Utf8Bom),
+            "latin1" | "latin-1" | "iso-8859-1" => Some(Self::Latin1),
+            _ => None,
+        }
+    }
+}
+
+const BOM: &[u8] = &[0xef, 0xbb, 0xbf];
+
+/// How much of a file is inspected for the NUL bytes that give a binary away.
+const BINARY_SNIFF: usize = 8 * 1024;
+
+/// Read a text file in whichever encoding it is in.
+///
+/// # Errors
+/// Returns an error if the file cannot be read or looks like a binary file.
+pub fn read_text(path: &Path) -> Result<(String, Encoding)> {
+    let bytes = fs::read(path).with_context(|| format!("cannot read {}", path.display()))?;
+    decode(&bytes).with_context(|| format!("cannot open {}", path.display()))
+}
+
+/// Turn a file's bytes into text, working out the encoding on the way.
+///
+/// # Errors
+/// Returns an error for binary data, which no text encoding can round-trip.
+pub fn decode(bytes: &[u8]) -> Result<(String, Encoding)> {
+    if bytes.iter().take(BINARY_SNIFF).any(|byte| *byte == 0) {
+        bail!("it looks like a binary file");
+    }
+    if let Some(rest) = bytes.strip_prefix(BOM)
+        && let Ok(text) = std::str::from_utf8(rest)
+    {
+        return Ok((text.to_string(), Encoding::Utf8Bom));
+    }
+    match std::str::from_utf8(bytes) {
+        Ok(text) => Ok((text.to_string(), Encoding::Utf8)),
+        Err(_) => Ok((
+            bytes.iter().map(|byte| char::from(*byte)).collect(),
+            Encoding::Latin1,
+        )),
+    }
+}
+
+/// Turn text back into the bytes `encoding` stores it as.
+///
+/// # Errors
+/// Returns an error naming the first character Latin-1 cannot hold.
+pub fn encode(text: &str, encoding: Encoding) -> Result<Vec<u8>> {
+    Ok(match encoding {
+        Encoding::Utf8 => text.as_bytes().to_vec(),
+        Encoding::Utf8Bom => {
+            let mut bytes = BOM.to_vec();
+            bytes.extend_from_slice(text.as_bytes());
+            bytes
+        }
+        Encoding::Latin1 => {
+            let mut bytes = Vec::with_capacity(text.len());
+            for ch in text.chars() {
+                let Ok(byte) = u8::try_from(u32::from(ch)) else {
+                    bail!(
+                        "{ch:?} (U+{:04X}) cannot be saved as latin1 — :set encoding=utf-8 first",
+                        u32::from(ch)
+                    );
+                };
+                bytes.push(byte);
+            }
+            bytes
+        }
+    })
+}
+
+/// Whether the current user can write to `path`.
+///
+/// Asked by opening the file for appending, which changes nothing: the
+/// permission bits alone cannot answer it, since ownership, groups and ACLs
+/// all have a say.
+#[must_use]
+pub fn is_writable(path: &Path) -> bool {
+    if !path.exists() {
+        return path
+            .parent()
+            .is_none_or(|parent| parent.as_os_str().is_empty() || parent.exists());
+    }
+    OpenOptions::new().append(true).open(path).is_ok()
+}
 
 /// Read a UTF-8 file into memory.
 ///
@@ -123,8 +243,22 @@ fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
 /// # Errors
 /// Returns an error if the temporary file cannot be written or renamed.
 pub fn write_file(path: &Path, contents: &str) -> Result<()> {
+    write_bytes(path, contents.as_bytes())
+}
+
+/// [`write_file`] for bytes that are already encoded.
+///
+/// The replacement takes over the permissions of the file it replaces, so
+/// saving a script does not quietly make it non-executable.
+///
+/// # Errors
+/// Returns an error if the temporary file cannot be written or renamed.
+pub fn write_bytes(path: &Path, contents: &[u8]) -> Result<()> {
     let temp = temp_path(path);
     fs::write(&temp, contents).with_context(|| format!("cannot write {}", temp.display()))?;
+    if let Ok(metadata) = fs::metadata(path) {
+        let _ = fs::set_permissions(&temp, metadata.permissions());
+    }
     fs::rename(&temp, path)
         .with_context(|| format!("cannot replace {}", path.display()))
         .inspect_err(|_| {
@@ -153,6 +287,35 @@ mod tests {
         let _ = fs::remove_dir_all(&root);
         fs::create_dir(&root).expect("create fixture");
         root
+    }
+
+    #[test]
+    fn text_round_trips_through_every_encoding() {
+        for (bytes, encoding) in [
+            (b"plain".to_vec(), Encoding::Utf8),
+            ([BOM, "bom".as_bytes()].concat(), Encoding::Utf8Bom),
+            (vec![b'c', 0xe9, b'!'], Encoding::Latin1),
+        ] {
+            let (text, found) = decode(&bytes).expect("decodes");
+            assert_eq!(found, encoding);
+            assert_eq!(encode(&text, found).expect("encodes"), bytes);
+        }
+        assert!(decode(b"elf\0\0data").is_err());
+        assert!(encode("ğ", Encoding::Latin1).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saving_keeps_the_permissions_of_the_file_it_replaces() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = fixture("keep-permissions");
+        let path = root.join("run.sh");
+        fs::write(&path, "echo old").expect("write fixture");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).expect("chmod");
+
+        write_file(&path, "echo new").expect("save");
+        let mode = fs::metadata(&path).expect("metadata").permissions().mode();
+        assert_eq!(mode & 0o777, 0o755);
     }
 
     #[test]

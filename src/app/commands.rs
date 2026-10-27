@@ -51,6 +51,8 @@ COMMANDS  :w [path]  :q[!]  :wq  :wa  :qa[!]  :wqa  :e[!] path
           :find  :buffers  :commands  :themes  :bn  :bp
           :sp  :vs  :clo  :on
           :set <option> [value]     :theme <name>     :<line>
+          :w! write read-only   :sudow write with sudo   :recover :dropswap
+          :set ff=unix|dos   :set fenc=utf-8|utf-8-bom|latin1   :set ro
           :%s/pattern/replacement/g";
 
 pub fn run(app: &mut App, line: &str) {
@@ -79,10 +81,13 @@ fn terminal_command(input: &str) -> Option<Option<&str>> {
 
 fn execute(app: &mut App, command: Command) {
     match command {
-        Command::Write(path) => write(app, path),
+        Command::Write { path, force } => write(app, path, force),
+        Command::SudoWrite => sudo_write(app),
+        Command::Recover => recover(app),
+        Command::DropSwap => drop_swap(app),
         Command::Quit { force } => quit(app, force),
         Command::WriteQuit { force } => {
-            write(app, None);
+            write(app, None, force);
             if !app.status.is_error {
                 quit(app, force);
             }
@@ -216,8 +221,22 @@ fn create_path(app: &mut App, path: PathBuf, directory: bool) {
     }
 }
 
-fn write(app: &mut App, path: Option<PathBuf>) {
-    if app.config.trim_trailing_whitespace {
+/// `:w`, `:w!` and Ctrl+S.
+///
+/// A read-only buffer is only written when forced, or to another path.
+pub(super) fn write(app: &mut App, path: Option<PathBuf>, force: bool) {
+    let name = app.buffer().document.display_name().to_string();
+    if path.is_none() && !force && app.buffer().document.is_readonly() {
+        let hint = if cfg!(unix) {
+            ", :w! to try anyway, or :sudow to write it with sudo"
+        } else {
+            " — :w! to try anyway"
+        };
+        app.error(format!("{name} is read-only{hint}"));
+        return;
+    }
+    let config = app.buffer_config(app.window().buffer);
+    if config.trim_trailing_whitespace {
         app.edit().trim_trailing_whitespace();
     }
     let renamed = path.is_some();
@@ -247,12 +266,17 @@ fn write(app: &mut App, path: Option<PathBuf>) {
 /// One failure does not stop the rest: a read-only file among ten should not
 /// cost the user the other nine.
 fn write_all(app: &mut App) -> bool {
-    let trim = app.config.trim_trailing_whitespace;
     let undo_dir = app.undo_dir();
+    let global = app.config.clone();
     let mut written = 0;
     let mut failures = Vec::new();
     for buffer in &mut app.buffers {
         if !buffer.document.is_dirty() {
+            continue;
+        }
+        let trim = buffer.config(&global).trim_trailing_whitespace;
+        if buffer.document.is_readonly() {
+            failures.push(format!("{} is read-only", buffer.document.display_name()));
             continue;
         }
         if buffer.document.path().is_none() {
@@ -280,6 +304,68 @@ fn write_all(app: &mut App) -> bool {
     } else {
         app.error(failures.join("; "));
         false
+    }
+}
+
+/// `:sudow` — hand the encoded text to the event loop, which suspends the
+/// interface and runs `sudo tee`.
+fn sudo_write(app: &mut App) {
+    if !cfg!(unix) {
+        app.error(":sudow needs sudo, which this platform does not have");
+        return;
+    }
+    let Some(path) = app
+        .buffer()
+        .document
+        .path()
+        .map(std::path::Path::to_path_buf)
+    else {
+        app.error("no file name — use :w <path>");
+        return;
+    };
+    match app.buffer().document.to_disk_bytes() {
+        Ok(bytes) => {
+            app.pending_sudo = Some(super::state::SudoWrite {
+                buffer: app.window().buffer,
+                path,
+                bytes,
+            });
+        }
+        Err(error) => app.error(error.to_string()),
+    }
+}
+
+/// `:recover` — replace the buffer's text with what its swap file kept, as
+/// one undoable change.
+fn recover(app: &mut App) {
+    let (Some(directory), Some(path)) = (
+        app.swap_dir(),
+        app.buffer()
+            .document
+            .path()
+            .map(std::path::Path::to_path_buf),
+    ) else {
+        app.error("nothing to recover");
+        return;
+    };
+    let Some((swap, _)) = crate::filesystem::swap::read(&directory, &path) else {
+        app.error(format!("no swap file for {}", path.display()));
+        return;
+    };
+    let length = app.buffer().document.len_chars();
+    let mut edit = app.edit();
+    edit.begin_group();
+    edit.replace(0, length, &swap.text);
+    edit.end_group();
+    app.clamp_cursors(false);
+    app.info("recovered — check the text, then :w to keep it");
+}
+
+/// `:dropswap` — forget a swap file's unsaved text.
+fn drop_swap(app: &mut App) {
+    if let (Some(directory), Some(path)) = (app.swap_dir(), app.buffer().document.path()) {
+        crate::filesystem::swap::remove(&directory, path);
+        app.info("swap file removed");
     }
 }
 
@@ -354,7 +440,29 @@ fn set_option(app: &mut App, key: &str, value: &str) {
         "wrap" | "word_wrap" => app.config.word_wrap = boolean(),
         "autoindent" | "ai" | "auto_indent" => app.config.auto_indent = boolean(),
         "autopairs" | "ap" | "auto_pairs" => app.config.auto_pairs = boolean(),
-        "expandtab" | "et" | "expand_tabs" => app.config.expand_tabs = boolean(),
+        "expandtab" | "et" | "expand_tabs" => {
+            app.config.expand_tabs = boolean();
+            app.buffer_mut().options.expand_tabs = Some(boolean());
+        }
+        "trim" | "trim_trailing_whitespace" => {
+            app.config.trim_trailing_whitespace = boolean();
+            app.buffer_mut().options.trim_trailing_whitespace = Some(boolean());
+        }
+        "finalnewline" | "fixeol" | "insert_final_newline" => {
+            app.config.insert_final_newline = boolean();
+            app.buffer_mut().options.insert_final_newline = Some(boolean());
+        }
+        "fileformat" | "ff" => match crate::editor::document::LineEnding::from_name(value) {
+            Some(ending) => app.buffer_mut().document.set_line_ending(ending),
+            None => return app.error("fileformat is unix or dos"),
+        },
+        "encoding" | "enc" | "fileencoding" | "fenc" => {
+            match crate::filesystem::Encoding::from_name(value) {
+                Some(encoding) => app.buffer_mut().document.set_encoding(encoding),
+                None => return app.error("encoding is utf-8, utf-8-bom or latin1"),
+            }
+        }
+        "readonly" | "ro" => app.buffer_mut().document.set_readonly(boolean()),
         "cursorline" | "cul" | "highlight_current_line" => {
             app.config.highlight_current_line = boolean();
         }
@@ -374,8 +482,10 @@ fn set_option(app: &mut App, key: &str, value: &str) {
             }
         }
         "tabs" | "show_tabs" => app.config.show_tabs = boolean(),
-        "tabstop" | "ts" | "tab_width" => {
-            app.config.tab_width = number(app.config.tab_width).clamp(1, 16);
+        "tabstop" | "ts" | "tab_width" | "shiftwidth" | "sw" => {
+            let width = number(app.config.tab_width).clamp(1, 16);
+            app.config.tab_width = width;
+            app.buffer_mut().options.tab_width = Some(width);
         }
         "scrolloff" | "so" => app.config.scrolloff = number(app.config.scrolloff).min(32),
         "ignorecase" | "ic" => app.search.case_sensitive = Some(!boolean()),
@@ -503,6 +613,49 @@ mod tests {
             std::fs::read_to_string(root.join("b.txt")).unwrap(),
             "b.txt"
         );
+    }
+
+    #[test]
+    fn a_read_only_buffer_needs_a_bang_to_write() {
+        let path = fixture("read-only-write").join("locked.txt");
+        std::fs::write(&path, "locked").expect("write fixture");
+        let mut app = app();
+        app.open(path.clone()).expect("open fixture");
+        app.buffer_mut().document.set_readonly(true);
+        app.edit().insert_text("still ");
+
+        run(&mut app, "w");
+        assert!(app.status.is_error);
+        assert!(app.status.text.contains("read-only"), "{}", app.status.text);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "locked");
+
+        run(&mut app, "w!");
+        assert!(!app.status.is_error, "{}", app.status.text);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "still locked");
+    }
+
+    #[test]
+    fn a_latin1_file_is_written_back_byte_for_byte() {
+        let path = fixture("latin1-round-trip").join("old.txt");
+        std::fs::write(&path, [b'c', b'a', b'f', 0xe9]).expect("write fixture");
+        let mut app = app();
+        app.open(path.clone()).expect("open fixture");
+        assert_eq!(app.buffer().document.text().to_string(), "café");
+        app.edit().insert_text("> ");
+        run(&mut app, "w");
+        assert_eq!(std::fs::read(&path).unwrap(), b"> caf\xe9");
+    }
+
+    #[test]
+    fn line_endings_switch_with_fileformat() {
+        let path = fixture("fileformat").join("lines.txt");
+        std::fs::write(&path, "a\nb\n").expect("write fixture");
+        let mut app = app();
+        app.open(path.clone()).expect("open fixture");
+        run(&mut app, "set ff=dos");
+        assert!(app.buffer().document.is_dirty());
+        run(&mut app, "w");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\r\nb\r\n");
     }
 
     #[test]

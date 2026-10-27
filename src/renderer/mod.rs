@@ -31,6 +31,7 @@ type Backend = CrosstermBackend<Stdout>;
 /// An initialised terminal that restores itself when dropped.
 pub struct Tui {
     terminal: Terminal<Backend>,
+    mouse: bool,
 }
 
 impl Tui {
@@ -53,7 +54,32 @@ impl Tui {
             execute!(stdout, EnableMouseCapture)?;
         }
         let terminal = Terminal::new(CrosstermBackend::new(stdout))?;
-        Ok(Self { terminal })
+        Ok(Self { terminal, mouse })
+    }
+
+    /// Give the terminal back to the shell for a moment — while `sudo` asks
+    /// for a password, say.
+    ///
+    /// # Errors
+    /// Returns an error if the terminal state cannot be reset.
+    pub fn suspend(&mut self) -> Result<()> {
+        restore()?;
+        Ok(())
+    }
+
+    /// Take the terminal back after [`Tui::suspend`] and redraw everything.
+    ///
+    /// # Errors
+    /// Returns an error if raw mode or the alternate screen cannot be entered.
+    pub fn resume(&mut self) -> Result<()> {
+        enable_raw_mode()?;
+        let mut stdout = io::stdout();
+        execute!(stdout, EnterAlternateScreen, EnableBracketedPaste)?;
+        if self.mouse {
+            execute!(stdout, EnableMouseCapture)?;
+        }
+        self.terminal.clear()?;
+        Ok(())
     }
 
     /// Render one frame.

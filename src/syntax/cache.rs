@@ -17,6 +17,13 @@
 use super::{BlockState, Highlight, Highlighter};
 use crate::editor::document::Document;
 
+/// Lines longer than this many characters are drawn without highlighting.
+///
+/// A minified bundle can be one line of a megabyte; running a regex over it on
+/// every frame would freeze the editor for the sake of colouring a line nobody
+/// is going to read.
+const LONG_LINE: usize = 10_000;
+
 /// Per-buffer syntax state.
 #[derive(Default)]
 pub struct HighlightCache {
@@ -91,7 +98,13 @@ impl HighlightCache {
         while self.states.len() <= target {
             let line = self.states.len() - 1;
             let state = self.states[line];
-            let (_, next) = highlighter.highlight_line(&document.line_string(line), state);
+            let next = if document.line_len(line) > LONG_LINE {
+                state
+            } else {
+                highlighter
+                    .highlight_line(&document.line_string(line), state)
+                    .1
+            };
             self.states.push(next);
         }
     }
@@ -108,6 +121,9 @@ impl HighlightCache {
         let Some(state) = self.states.get(line).copied() else {
             return Vec::new();
         };
+        if document.line_len(line) > LONG_LINE {
+            return Vec::new();
+        }
         highlighter
             .highlight_line(&document.line_string(line), state)
             .0

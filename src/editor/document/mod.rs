@@ -24,7 +24,7 @@ use anyhow::{Result, bail};
 use ropey::{Rope, RopeSlice};
 
 use crate::editor::cursor::Position;
-use crate::filesystem;
+use crate::filesystem::{self, Encoding};
 
 /// The line terminator a file uses on disk.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -57,6 +57,16 @@ impl LineEnding {
             Self::Crlf => "CRLF",
         }
     }
+
+    /// The line ending `:set fileformat` names: `unix` or `dos`.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.to_ascii_lowercase().as_str() {
+            "unix" | "lf" => Some(Self::Lf),
+            "dos" | "crlf" | "windows" => Some(Self::Crlf),
+            _ => None,
+        }
+    }
 }
 
 /// A single open file's text.
@@ -65,7 +75,13 @@ pub struct Document {
     text: Rope,
     path: Option<PathBuf>,
     line_ending: LineEnding,
+    encoding: Encoding,
     dirty: bool,
+    /// Whether writing should be refused without a `!`.
+    readonly: bool,
+    /// Bumped by every change, so anything derived from the text — swap
+    /// files, git signs, a language server — can tell when to recompute.
+    revision: u64,
 }
 
 impl Default for Document {
@@ -82,7 +98,10 @@ impl Document {
             text: Rope::new(),
             path: None,
             line_ending: LineEnding::default(),
+            encoding: Encoding::default(),
             dirty: false,
+            readonly: false,
+            revision: 0,
         }
     }
 
@@ -99,7 +118,10 @@ impl Document {
             text: normalised,
             path,
             line_ending,
+            encoding: Encoding::default(),
             dirty: false,
+            readonly: false,
+            revision: 0,
         }
     }
 
@@ -119,6 +141,48 @@ impl Document {
     #[must_use]
     pub const fn line_ending(&self) -> LineEnding {
         self.line_ending
+    }
+
+    /// The encoding the document will be written in.
+    #[must_use]
+    pub const fn encoding(&self) -> Encoding {
+        self.encoding
+    }
+
+    /// Whether writing should be refused without a `!`.
+    #[must_use]
+    pub const fn is_readonly(&self) -> bool {
+        self.readonly
+    }
+
+    /// Mark the document read-only, or writable again.
+    pub const fn set_readonly(&mut self, readonly: bool) {
+        self.readonly = readonly;
+    }
+
+    /// A number that changes whenever the text does.
+    #[must_use]
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Write future saves with `ending`; a change of mind is a change to the
+    /// file, so it makes the document dirty.
+    pub fn set_line_ending(&mut self, ending: LineEnding) {
+        if self.line_ending != ending {
+            self.line_ending = ending;
+            self.dirty = true;
+            self.revision += 1;
+        }
+    }
+
+    /// Write future saves in `encoding`.
+    pub fn set_encoding(&mut self, encoding: Encoding) {
+        if self.encoding != encoding {
+            self.encoding = encoding;
+            self.dirty = true;
+            self.revision += 1;
+        }
     }
 
     /// File name for the tab strip and status bar.
@@ -141,11 +205,16 @@ impl Document {
     /// Open `path`, or start an empty document bound to it if it does not exist
     /// yet — `termi new_file.rs` should not be an error.
     ///
+    /// The encoding is worked out from the bytes — UTF-8, UTF-8 with a BOM,
+    /// or Latin-1 for anything else — and a file the user cannot write to opens
+    /// read-only.
+    ///
     /// # Errors
-    /// Returns an error if the file exists but cannot be read or is not UTF-8.
+    /// Returns an error if the file exists but cannot be read or is binary.
     pub fn open(path: PathBuf) -> Result<Self> {
         if !path.exists() {
             return Ok(Self {
+                readonly: !filesystem::is_writable(&path),
                 path: Some(path),
                 ..Self::new()
             });
@@ -153,8 +222,11 @@ impl Document {
         if path.is_dir() {
             bail!("{} is a directory", path.display());
         }
-        let text = filesystem::read_file(&path)?;
-        Ok(Self::from_text(&text, Some(path)))
+        let (text, encoding) = filesystem::read_text(&path)?;
+        let mut document = Self::from_text(&text, Some(path.clone()));
+        document.encoding = encoding;
+        document.readonly = !filesystem::is_writable(&path);
+        Ok(document)
     }
 
     /// Write the document back to its own path.
@@ -165,7 +237,7 @@ impl Document {
         let Some(path) = self.path.clone() else {
             bail!("no file name — use :w <path>");
         };
-        filesystem::write_file(&path, &self.to_disk_text())?;
+        filesystem::write_bytes(&path, &self.to_disk_bytes()?)?;
         self.dirty = false;
         Ok(())
     }
@@ -175,9 +247,10 @@ impl Document {
     /// # Errors
     /// Returns an error if the write fails; the path is only adopted on success.
     pub fn save_as(&mut self, path: PathBuf) -> Result<()> {
-        filesystem::write_file(&path, &self.to_disk_text())?;
+        filesystem::write_bytes(&path, &self.to_disk_bytes()?)?;
         self.path = Some(path);
         self.dirty = false;
+        self.readonly = false;
         Ok(())
     }
 
@@ -189,19 +262,28 @@ impl Document {
         let Some(path) = self.path.clone() else {
             bail!("nothing to reload");
         };
-        let text = filesystem::read_file(&path)?;
-        *self = Self::from_text(&text, Some(path));
+        let revision = self.revision;
+        *self = Self::open(path)?;
+        self.revision = revision + 1;
         Ok(())
     }
 
-    /// Whether `text` is exactly what saving this document would produce.
+    /// Whether `bytes` are exactly what saving this document would produce.
     ///
     /// Used to tell a real external edit from the editor seeing its own write:
     /// comparing content is reliable where comparing timestamps is not, and it
-    /// accounts for the line endings the file will be written with.
+    /// accounts for the line endings and encoding the file is written with.
     #[must_use]
-    pub fn matches_disk_text(&self, text: &str) -> bool {
-        self.to_disk_text() == text
+    pub fn matches_disk(&self, bytes: &[u8]) -> bool {
+        self.to_disk_bytes().is_ok_and(|ours| ours == bytes)
+    }
+
+    /// The document as the bytes a save would write.
+    ///
+    /// # Errors
+    /// Returns an error when the text holds a character its encoding cannot.
+    pub fn to_disk_bytes(&self) -> Result<Vec<u8>> {
+        filesystem::encode(&self.to_disk_text(), self.encoding)
     }
 
     /// Serialise the rope with this document's line ending.
@@ -324,6 +406,7 @@ impl Document {
             self.text.insert(index, text);
         }
         self.dirty = true;
+        self.revision += 1;
     }
 
     /// Remove `[start, end)` and return what was removed, for the undo stack.
@@ -336,6 +419,7 @@ impl Document {
         let removed = self.text.slice(start..end).to_string();
         self.text.remove(start..end);
         self.dirty = true;
+        self.revision += 1;
         removed
     }
 

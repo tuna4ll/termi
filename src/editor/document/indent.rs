@@ -10,7 +10,7 @@
 //! users expect while typing.
 //!
 //! **Public API:** [`first_non_blank`], [`indent_of`], [`indent_unit`],
-//! [`auto_indent_for_new_line`], [`should_dedent`].
+//! [`auto_indent_for_new_line`], [`should_dedent`], [`detect`].
 
 use ropey::RopeSlice;
 
@@ -39,6 +39,53 @@ pub fn indent_of(doc: &Document, line: usize) -> String {
         .chars()
         .take_while(|ch| *ch == ' ' || *ch == '\t')
         .collect()
+}
+
+/// How many lines [`detect`] reads before deciding.
+const DETECT_LINES: usize = 2_000;
+
+/// Guess how a file is indented: `(uses spaces, width of one level)`.
+///
+/// Tabs win if more lines start with one than with spaces. For spaces, the
+/// width is the step most often seen between one indented line and the next —
+/// counting steps rather than absolute indents is what keeps a deeply nested
+/// file from looking like it uses eight.
+///
+/// Returns `None` for a file with too little indentation to tell.
+#[must_use]
+pub fn detect(doc: &Document) -> Option<(bool, usize)> {
+    let mut tabs = 0usize;
+    let mut spaced = 0usize;
+    let mut steps = [0usize; 9];
+    let mut previous = 0usize;
+    for line in 0..doc.len_lines().min(DETECT_LINES) {
+        let text = doc.line(line);
+        if text.chars().all(char::is_whitespace) {
+            continue;
+        }
+        match text.chars().next() {
+            Some('\t') => {
+                tabs += 1;
+                continue;
+            }
+            Some(' ') => spaced += 1,
+            _ => {}
+        }
+        let width = text.chars().take_while(|ch| *ch == ' ').count();
+        let step = width.abs_diff(previous);
+        if (2..=8).contains(&step) {
+            steps[step] += 1;
+        }
+        previous = width;
+    }
+    if tabs + spaced < 3 {
+        return None;
+    }
+    if tabs > spaced {
+        return Some((false, 0));
+    }
+    let width = (2..=8).max_by_key(|step| (steps[*step], usize::MAX - step))?;
+    (steps[width] > 0).then_some((true, width))
 }
 
 /// One level of indentation.
@@ -95,4 +142,18 @@ pub fn should_dedent(doc: &Document, line: usize, col: usize, ch: char) -> bool 
         && col > 0
         // Nothing but whitespace to the left.
         && first_non_blank(doc, line) >= col
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indentation_is_read_from_the_steps_between_lines() {
+        let two = Document::from_text("a {\n  b {\n    c\n  }\n  d\n}\n", None);
+        assert_eq!(detect(&two), Some((true, 2)));
+        let tabs = Document::from_text("a\n\tb\n\tc\n\t\td\n", None);
+        assert_eq!(detect(&tabs), Some((false, 0)));
+        assert_eq!(detect(&Document::from_text("flat\ntext\n", None)), None);
+    }
 }

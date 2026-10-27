@@ -252,17 +252,17 @@ fn execute(app: &mut App, action: Action) -> Result<()> {
         Action::InsertNewline => {
             let (mut edit, config) = app.edit_and_config();
             edit.delete_selections();
-            edit.insert_newline(config);
+            edit.insert_newline(&config);
         }
         Action::InsertIndent => {
             let (mut edit, config) = app.edit_and_config();
             edit.delete_selections();
-            edit.insert_indent(config);
+            edit.insert_indent(&config);
         }
         Action::DeleteBackward => {
             let (mut edit, config) = app.edit_and_config();
             if !edit.delete_selections() {
-                edit.delete_backward(config);
+                edit.delete_backward(&config);
             }
         }
         Action::DeleteForward => {
@@ -469,9 +469,9 @@ fn insert_char(app: &mut App, ch: char) {
     let head = edit.window.cursor().head;
 
     if config.auto_indent && indent::should_dedent(&edit.buffer.document, head.line, head.col, ch) {
-        edit.delete_backward(config);
+        edit.delete_backward(&config);
     }
-    edit.insert_char(ch, config);
+    edit.insert_char(ch, &config);
 }
 
 const MATCH_COUNT_CAP: usize = 10_000;
@@ -557,10 +557,11 @@ fn drag(app: &mut App, x: u16, y: u16) {
 
 fn place_caret(app: &mut App, x: u16, y: u16, extend: bool) {
     let window = app.window();
+    let config = app.buffer_config(window.buffer);
     let position = editor_view::position_at(
         &app.buffers[window.buffer],
         window,
-        &app.config,
+        &config,
         window.area,
         x,
         y,
@@ -1006,7 +1007,7 @@ fn open_line(app: &mut App, below: bool) {
     app.move_cursors(motion, false, true);
 
     let (mut edit, config) = app.edit_and_config();
-    edit.insert_newline(config);
+    edit.insert_newline(&config);
     if !below {
         edit.window
             .move_cursors(Motion::Up(1), &edit.buffer.document, false, true);
@@ -1034,17 +1035,7 @@ fn add_cursor(app: &mut App, below: bool) {
 }
 
 fn save(app: &mut App) {
-    if app.config.trim_trailing_whitespace {
-        app.edit().trim_trailing_whitespace();
-    }
-    let undo_dir = app.undo_dir();
-    match app.buffer_mut().save(undo_dir.as_deref()) {
-        Ok(()) => {
-            let name = app.buffer().document.display_name().to_string();
-            app.info(format!("wrote {name}"));
-        }
-        Err(error) => app.error(error.to_string()),
-    }
+    commands::write(app, None, false);
 }
 
 fn quit(app: &mut App) {

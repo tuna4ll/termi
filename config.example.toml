@@ -37,7 +37,14 @@ show_tabs = true         # tab strip, shown when more than one file is open
 # Behaviour.
 watch_files = true             # reload clean buffers and refresh the file tree
 trim_trailing_whitespace = false
+insert_final_newline = false   # end every file with a line break on save
+detect_indent = true           # read each file's indentation from its contents
+editorconfig = true            # honour the project's .editorconfig files
 system_clipboard = true        # false uses an internal register instead
+
+# Safety.
+swap_files = true              # keep unsaved changes for :recover after a crash
+large_file_mb = 16             # bigger files open without highlighting
 
 # Undo.
 undo_limit = 1000              # states kept per buffer

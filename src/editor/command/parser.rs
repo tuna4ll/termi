@@ -43,7 +43,13 @@ pub fn parse(input: &str) -> Result<Command, String> {
     let argument = (!rest.is_empty()).then(|| rest.to_string());
 
     match name {
-        "w" | "write" => Ok(Command::Write(argument.map(PathBuf::from))),
+        "w" | "write" => Ok(Command::Write {
+            path: argument.map(PathBuf::from),
+            force,
+        }),
+        "sudow" | "sudowrite" => Ok(Command::SudoWrite),
+        "recover" | "rec" => Ok(Command::Recover),
+        "dropswap" => Ok(Command::DropSwap),
         "q" | "quit" => Ok(Command::Quit { force }),
         "wq" | "x" => Ok(Command::WriteQuit { force }),
         "wa" | "wall" => Ok(Command::WriteAll),
@@ -111,6 +117,8 @@ fn required_path(argument: Option<String>, command: &str) -> Result<PathBuf, Str
 
 /// `set key value`, where a missing value means "turn it on".
 fn parse_set(rest: &str) -> Result<Command, String> {
+    // `:set ts=2` and `:set ts 2` say the same thing.
+    let rest = rest.replacen('=', " ", 1);
     let mut parts = rest.split_whitespace();
     let Some(key) = parts.next() else {
         return Err("usage: :set <option> [value]".to_string());
@@ -180,10 +188,33 @@ mod tests {
 
     #[test]
     fn writes_with_and_without_a_path() {
-        assert_eq!(parse("w"), Ok(Command::Write(None)));
+        assert_eq!(
+            parse("w"),
+            Ok(Command::Write {
+                path: None,
+                force: false
+            })
+        );
         assert_eq!(
             parse("w  out.rs"),
-            Ok(Command::Write(Some(PathBuf::from("out.rs"))))
+            Ok(Command::Write {
+                path: Some(PathBuf::from("out.rs")),
+                force: false
+            })
+        );
+        assert_eq!(
+            parse("w!"),
+            Ok(Command::Write {
+                path: None,
+                force: true
+            })
+        );
+        assert_eq!(
+            parse("set ff=dos"),
+            Ok(Command::Set {
+                key: "ff".to_string(),
+                value: "dos".to_string()
+            })
         );
     }
 

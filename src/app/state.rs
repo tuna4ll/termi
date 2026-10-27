@@ -35,6 +35,21 @@ use crate::search::Search;
 use crate::terminal::Terminal;
 use crate::theme::Theme;
 
+/// A write that has to go through `sudo`, waiting for the event loop, which
+/// owns the terminal `sudo` needs to ask for a password on.
+#[derive(Debug, Clone)]
+pub struct SudoWrite {
+    /// The buffer being written, to mark clean once it is.
+    pub buffer: BufferId,
+    /// Where to write.
+    pub path: PathBuf,
+    /// The encoded text.
+    pub bytes: Vec<u8>,
+}
+
+/// How often a modified buffer's swap file is rewritten at most.
+const SWAP_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// A one-line message shown in the command bar until the next keystroke.
 #[derive(Debug, Clone, Default)]
 pub struct Status {
@@ -88,6 +103,8 @@ pub struct App {
     pub insert_group_open: bool,
     /// The keys of a command still being typed, shown in the status bar.
     pub showcmd: String,
+    /// A write waiting to be run through `sudo`.
+    pub pending_sudo: Option<SudoWrite>,
     /// Incremental search state, kept across searches so `n` can repeat one.
     pub search: Search,
     /// File browser, built on first use and kept afterwards so the expanded
@@ -165,6 +182,7 @@ impl App {
             replaying: false,
             insert_group_open: false,
             showcmd: String::new(),
+            pending_sudo: None,
             search: Search::default(),
             tree: None,
             tree_selected: 0,
@@ -318,6 +336,13 @@ impl App {
         };
     }
 
+    /// The settings in force for one buffer: the global config with what its
+    /// `.editorconfig`, its detected indentation and `:set` changed on top.
+    #[must_use]
+    pub fn buffer_config(&self, buffer: BufferId) -> Config {
+        self.buffers[buffer].config(&self.config)
+    }
+
     /// The focused buffer and window, borrowed together for one edit.
     pub fn edit(&mut self) -> Edit<'_> {
         let index = self.windows.focused().buffer;
@@ -327,15 +352,12 @@ impl App {
         Edit::new(&mut buffers[index], windows.focused_mut())
     }
 
-    /// An edit alongside the settings, borrowed as disjoint fields so an
-    /// operation can read the config while mutating the text.
-    pub fn edit_and_config(&mut self) -> (Edit<'_>, &Config) {
+    /// An edit alongside the settings in force for its buffer.
+    pub fn edit_and_config(&mut self) -> (Edit<'_>, Config) {
         let index = self.windows.focused().buffer;
+        let config = self.buffer_config(index);
         let Self {
-            buffers,
-            windows,
-            config,
-            ..
+            buffers, windows, ..
         } = self;
         (
             Edit::new(&mut buffers[index], windows.focused_mut()),
@@ -394,11 +416,24 @@ impl App {
             self.record_recent(path);
             return Ok(());
         }
+        let existed = path.exists();
         let mut buffer = Buffer::new(Document::open(path.clone())?);
-        match self.undo_dir() {
+        let limit = self.config.large_file_mb.saturating_mul(1 << 20);
+        buffer.large = std::fs::metadata(&path).is_ok_and(|meta| meta.len() > limit);
+        self.configure_buffer(&mut buffer, existed);
+        let undo_dir = self.undo_dir().filter(|_| !buffer.large);
+        match undo_dir {
             Some(directory) => buffer.restore_history(&directory, self.config.undo_limit),
             None => buffer.history.set_limit(self.config.undo_limit),
         }
+        if buffer.large {
+            buffer.syntax.set_language(None);
+            self.info(format!(
+                "{} is large — highlighting is off for it",
+                buffer.document.display_name()
+            ));
+        }
+        self.check_swap(&buffer);
 
         // The initial scratch buffer is a placeholder, not a document the user
         // asked for; replace it rather than accumulating an empty tab.
@@ -414,6 +449,139 @@ impl App {
         }
         self.record_recent(path);
         Ok(())
+    }
+
+    /// Settle a freshly opened buffer's own settings: what `.editorconfig`
+    /// says, and failing that how the file is already indented.
+    fn configure_buffer(&self, buffer: &mut Buffer, existed: bool) {
+        if self.config.detect_indent
+            && let Some((spaces, width)) = crate::editor::document::indent::detect(&buffer.document)
+        {
+            buffer.options.expand_tabs = Some(spaces);
+            if spaces {
+                buffer.options.tab_width = Some(width);
+            }
+        }
+        if !self.config.editorconfig {
+            return;
+        }
+        let Some(path) = buffer.document.path() else {
+            return;
+        };
+        let properties = crate::filesystem::editorconfig::properties_for(path);
+        buffer.options.absorb(&properties);
+        // An existing file keeps the line endings and encoding it has; only a
+        // new one is created the way the project asks.
+        if !existed {
+            if let Some(ending) = properties.end_of_line {
+                buffer.document.set_line_ending(ending);
+            }
+            if let Some(encoding) = properties.charset {
+                buffer.document.set_encoding(encoding);
+            }
+            buffer.document.set_dirty(false);
+        }
+    }
+
+    /// Where swap files go, when they are wanted at all.
+    #[must_use]
+    pub fn swap_dir(&self) -> Option<PathBuf> {
+        if cfg!(test) || !self.config.swap_files {
+            return None;
+        }
+        Some(config::data_dir().join("swap"))
+    }
+
+    /// Tell the user about unsaved work a swap file holds for `buffer`.
+    fn check_swap(&mut self, buffer: &Buffer) {
+        let (Some(directory), Some(path)) = (self.swap_dir(), buffer.document.path()) else {
+            return;
+        };
+        let Some((swap, written)) = crate::filesystem::swap::read(&directory, path) else {
+            return;
+        };
+        if swap.pid == std::process::id() {
+            return;
+        }
+        let name = buffer.document.display_name();
+        if swap.writer_alive() {
+            self.show_popup(
+                "file already open",
+                format!(
+                    "{name} is being edited in another termi (process {}).\n\nChanges made in both will overwrite each other.",
+                    swap.pid
+                ),
+            );
+            return;
+        }
+        if buffer
+            .document
+            .to_disk_bytes()
+            .is_ok_and(|bytes| bytes == swap.text.as_bytes())
+        {
+            crate::filesystem::swap::remove(&directory, path);
+            return;
+        }
+        let age = written.elapsed().map_or_else(
+            |_| "some time".to_string(),
+            |elapsed| describe_age(elapsed.as_secs()),
+        );
+        self.show_popup(
+            "unsaved changes found",
+            format!(
+                "termi did not close cleanly while {name} had unsaved changes, {age} ago.\n\n:recover brings them back; :dropswap throws them away."
+            ),
+        );
+    }
+
+    /// Write swap files for buffers changed since their last one, and drop
+    /// the swap files of buffers that are clean again.
+    pub fn write_swaps(&mut self) {
+        let Some(directory) = self.swap_dir() else {
+            return;
+        };
+        let now = std::time::Instant::now();
+        for buffer in &mut self.buffers {
+            let Some(path) = buffer.document.path().map(Path::to_path_buf) else {
+                continue;
+            };
+            if buffer.large {
+                continue;
+            }
+            if !buffer.document.is_dirty() {
+                if buffer.swap_revision.take().is_some() {
+                    crate::filesystem::swap::remove(&directory, &path);
+                }
+                continue;
+            }
+            let revision = buffer.document.revision();
+            if buffer.swap_revision == Some(revision)
+                || buffer
+                    .swap_written
+                    .is_some_and(|written| now.duration_since(written) < SWAP_INTERVAL)
+            {
+                continue;
+            }
+            let text = buffer.document.text().to_string();
+            if crate::filesystem::swap::write(&directory, &path, &text).is_ok() {
+                buffer.swap_revision = Some(revision);
+                buffer.swap_written = Some(now);
+            }
+        }
+    }
+
+    /// Remove every swap file this editor wrote, on the way out.
+    pub fn remove_swaps(&mut self) {
+        let Some(directory) = self.swap_dir() else {
+            return;
+        };
+        for buffer in &mut self.buffers {
+            if buffer.swap_revision.take().is_some()
+                && let Some(path) = buffer.document.path()
+            {
+                crate::filesystem::swap::remove(&directory, path);
+            }
+        }
     }
 
     pub fn open_picker(&mut self, kind: PickerKind) {
@@ -480,6 +648,12 @@ impl App {
     }
 
     fn close_buffer(&mut self, index: BufferId) {
+        if let (Some(directory), Some(path)) =
+            (self.swap_dir(), self.buffers[index].document.path())
+            && self.buffers[index].swap_revision.is_some()
+        {
+            crate::filesystem::swap::remove(&directory, path);
+        }
         if self.buffers.len() == 1 {
             self.buffers[0] = Buffer::empty();
             for (_, window) in self.windows.iter_mut() {
@@ -724,6 +898,17 @@ impl App {
         let document = &self.buffers[index].document;
         document.path().is_none() && !document.is_dirty() && document.len_chars() == 0
     }
+}
+
+/// "12 minutes", "3 hours": how long ago something happened, roughly.
+fn describe_age(seconds: u64) -> String {
+    let (amount, unit) = match seconds {
+        0..60 => (seconds, "second"),
+        60..3600 => (seconds / 60, "minute"),
+        3600..86_400 => (seconds / 3600, "hour"),
+        _ => (seconds / 86_400, "day"),
+    };
+    format!("{amount} {unit}{}", if amount == 1 { "" } else { "s" })
 }
 
 fn command_picker() -> Picker {

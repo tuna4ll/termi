@@ -376,7 +376,7 @@ fn place(app: &mut App, positions: Vec<Position>) {
 
 fn change(app: &mut App, spans: &[Span], text: String, kind: RegisterKind) {
     app.registers.delete(text, kind);
-    let auto_indent = app.config.auto_indent;
+    let auto_indent = app.buffer_config(app.window().buffer).auto_indent;
     let document = &app.buffer().document;
     let mut indents = Vec::new();
     let replacements: Vec<(Range, String)> = spans
@@ -419,8 +419,9 @@ fn change(app: &mut App, spans: &[Span], text: String, kind: RegisterKind) {
 }
 
 fn shift_lines(app: &mut App, spans: &[Span], indent_right: bool, times: usize) {
-    let tab_width = app.config.tab_width;
-    let unit = indent::indent_unit(tab_width, app.config.expand_tabs).repeat(times);
+    let config = app.buffer_config(app.window().buffer);
+    let tab_width = config.tab_width;
+    let unit = indent::indent_unit(tab_width, config.expand_tabs).repeat(times);
     let document = &app.buffer().document;
     let mut lines: Vec<usize> = spans
         .iter()
