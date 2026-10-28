@@ -70,6 +70,9 @@ pub fn dark() -> Theme {
             .fg(fg_dim)
             .bg(bg_soft)
             .add_modifier(Modifier::ITALIC),
+        git_added: Style::new().fg(Color::Rgb(0x7f, 0xb9, 0x6e)),
+        git_modified: Style::new().fg(Color::Rgb(0xd7, 0xba, 0x7d)),
+        git_removed: Style::new().fg(Color::Rgb(0xe5, 0x5f, 0x5f)),
         syntax: SyntaxStyles {
             keyword: Style::new().fg(Color::Rgb(0xc5, 0x86, 0xc0)),
             type_name: Style::new().fg(Color::Rgb(0x4e, 0xc9, 0xb0)),
@@ -153,6 +156,9 @@ pub fn light() -> Theme {
             .fg(fg_dim)
             .bg(bg_soft)
             .add_modifier(Modifier::ITALIC),
+        git_added: Style::new().fg(Color::Rgb(0x2e, 0x7d, 0x32)),
+        git_modified: Style::new().fg(Color::Rgb(0xa6, 0x6a, 0x00)),
+        git_removed: Style::new().fg(Color::Rgb(0xc0, 0x2c, 0x2c)),
         syntax: SyntaxStyles {
             keyword: Style::new().fg(Color::Rgb(0x8b, 0x2c, 0x9e)),
             type_name: Style::new().fg(Color::Rgb(0x0f, 0x6b, 0x63)),

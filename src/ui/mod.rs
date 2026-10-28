@@ -127,6 +127,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(
             FileTree {
                 entries: tree.entries(),
+                status: &app.tree_status,
                 selected: app.tree_selected,
                 focused: app.mode == crate::app::mode::Mode::Tree,
                 title: &title,
@@ -371,6 +372,7 @@ fn draw_windows(frame: &mut Frame, app: &App, panes: &Panes) -> Option<(u16, u16
             active_match: if focused { active_match(app) } else { None },
             brackets,
             folds: &folds,
+            signs: &buffer.git.signs,
         };
         if focused {
             caret = view.caret_position(*rect);
@@ -496,6 +498,7 @@ fn status_bar(app: &App) -> StatusBar<'_> {
             .filter(|encoding| *encoding != crate::filesystem::Encoding::Utf8)
             .map(crate::filesystem::Encoding::label),
         readonly: buffer.document.is_readonly(),
+        branch: buffer.git.branch.as_deref(),
         cursor_count: window.cursors().len(),
         selected: selection_ranges(app)
             .iter()
@@ -532,6 +535,7 @@ mod tests {
             system_clipboard: false,
             syntax_highlighting: false,
             line_numbers: false,
+            sign_column: false,
             ..Config::default()
         });
         app.buffers[0] = TextBuffer::new(Document::from_text(text, None));
@@ -592,6 +596,26 @@ mod tests {
         )
         .expect("move down");
         assert_eq!(app.window().cursor().head.line, 3);
+    }
+
+    #[test]
+    fn git_signs_sit_in_their_own_column() {
+        use crate::git::Sign;
+        let mut app = app("same\nnew\nchanged");
+        app.config.sign_column = true;
+        app.buffers[0].git.signs = vec![None, Some(Sign::Added), Some(Sign::Modified)];
+        let surface = render(&mut app, 20, 6);
+        assert!(
+            row(&surface, 0).starts_with(" same"),
+            "{}",
+            row(&surface, 0)
+        );
+        assert!(row(&surface, 1).starts_with("▎new"), "{}", row(&surface, 1));
+        assert!(
+            row(&surface, 2).starts_with("▎changed"),
+            "{}",
+            row(&surface, 2)
+        );
     }
 
     #[test]

@@ -188,6 +188,10 @@ pub struct Config {
     pub match_brackets: bool,
     /// Show a miniature of the whole file beside each window.
     pub minimap: bool,
+    /// Keep a column beside the line numbers for git and diagnostic signs.
+    pub sign_column: bool,
+    /// Mark lines changed since the last commit, and show the branch.
+    pub git: bool,
     /// Reopen the files, windows and places of the last session in this
     /// directory when started without files.
     pub restore_session: bool,
@@ -228,6 +232,8 @@ impl Default for Config {
             indent_guides: false,
             match_brackets: true,
             minimap: false,
+            sign_column: true,
+            git: true,
             restore_session: true,
             keys: KeyTables::default(),
             languages: HashMap::new(),

@@ -151,6 +151,8 @@ pub enum Command {
     Earlier(usize),
     /// `:later [n]` — step forward again.
     Later(usize),
+    /// `:blame` — who last changed the caret's line.
+    Blame,
     /// `:help` — open the key and command reference.
     Help,
     /// `:find` — search project files.

@@ -6,14 +6,15 @@
 //! - [`ui`] renders that state; [`renderer`] owns the terminal
 //! - [`input`] turns keys into actions
 //! - [`editor`] manipulates text and knows nothing about either
-//! - [`config`], [`theme`], [`syntax`], [`search`], [`undo`], [`clipboard`] and
-//!   [`filesystem`] are leaf services used by the layers above
+//! - [`config`], [`theme`], [`syntax`], [`search`], [`undo`], [`clipboard`],
+//!   [`filesystem`] and [`git`] are leaf services used by the layers above
 
 mod app;
 mod clipboard;
 mod config;
 mod editor;
 mod filesystem;
+mod git;
 mod input;
 mod picker;
 mod renderer;

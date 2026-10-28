@@ -27,17 +27,19 @@ use crate::syntax::Highlight;
 use crate::theme::Theme;
 use crate::ui::text::DisplayLine;
 
-/// Columns reserved for the line-number gutter, including its trailing space.
+/// Columns reserved for the gutter: the sign column, when it is on, and the
+/// line numbers with their trailing space.
 ///
-/// Returns `0` when line numbers are off, which makes the text area logic
-/// uniform — there is no special case for "no gutter".
+/// Returns `0` when both are off, which makes the text area logic uniform —
+/// there is no special case for "no gutter".
 #[must_use]
 pub fn gutter_width(config: &Config, line_count: usize) -> u16 {
+    let signs = u16::from(config.sign_column);
     if !config.line_numbers {
-        return 0;
+        return signs;
     }
     let digits = line_count.max(1).ilog10() as u16 + 1;
-    digits.max(3) + 2
+    signs + digits.max(3) + 2
 }
 
 /// Scroll a window so its primary caret is on screen.
@@ -322,6 +324,8 @@ pub struct EditorView<'a> {
     pub brackets: Option<(usize, usize)>,
     /// Closed folds, as the line spans they hide.
     pub folds: &'a [(usize, usize)],
+    /// How each line differs from the last commit, indexed by line.
+    pub signs: &'a [Option<crate::git::Sign>],
 }
 
 impl EditorView<'_> {
@@ -382,9 +386,18 @@ impl EditorView<'_> {
         ))
     }
 
-    /// Draw the line number for one row.
+    /// Draw the sign and the line number for one row.
     fn render_gutter(&self, surface: &mut Surface, area: Rect, y: u16, line: usize, caret: usize) {
-        let width = gutter_width(self.config, self.buffer.document.len_lines());
+        let mut width = gutter_width(self.config, self.buffer.document.len_lines());
+        if width == 0 {
+            return;
+        }
+        let mut area = area;
+        if self.config.sign_column {
+            self.render_sign(surface, area.x, y, line);
+            area.x += 1;
+            width -= 1;
+        }
         if width == 0 {
             return;
         }
@@ -412,6 +425,22 @@ impl EditorView<'_> {
             if let Some(cell) = surface.cell_mut((area.x + offset, y)) {
                 cell.set_char(ch).set_style(style);
             }
+        }
+    }
+
+    /// The mark in the sign column: how the line differs from the last
+    /// commit.
+    fn render_sign(&self, surface: &mut Surface, x: u16, y: u16, line: usize) {
+        use crate::git::Sign;
+        let (glyph, style) = match self.signs.get(line).copied().flatten() {
+            Some(Sign::Added) => ('▎', self.theme.git_added),
+            Some(Sign::Modified) => ('▎', self.theme.git_modified),
+            Some(Sign::Removed) => ('▔', self.theme.git_removed),
+            None => (' ', Style::new()),
+        };
+        if let Some(cell) = surface.cell_mut((x, y)) {
+            cell.set_char(glyph)
+                .set_style(self.theme.gutter.patch(style));
         }
     }
 

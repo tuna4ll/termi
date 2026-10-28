@@ -68,6 +68,12 @@ pub struct Theme {
     pub bracket_match: Style,
     /// The line standing in for a closed fold.
     pub fold: Style,
+    /// The sign for a line added since the last commit.
+    pub git_added: Style,
+    /// The sign for a changed line.
+    pub git_modified: Style,
+    /// The sign where lines were removed.
+    pub git_removed: Style,
     /// Token styles.
     pub syntax: SyntaxStyles,
 }

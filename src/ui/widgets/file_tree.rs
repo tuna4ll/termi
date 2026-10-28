@@ -14,6 +14,9 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, BorderType, Borders, Widget};
 
+use std::collections::HashMap;
+use std::path::PathBuf;
+
 use crate::filesystem::tree::Entry;
 use crate::theme::Theme;
 
@@ -21,6 +24,8 @@ use crate::theme::Theme;
 pub struct FileTree<'a> {
     /// Rows to draw, already flattened.
     pub entries: &'a [Entry],
+    /// Git's status letter for changed paths.
+    pub status: &'a HashMap<PathBuf, char>,
     /// Index of the highlighted row.
     pub selected: usize,
     /// Whether the panel has keyboard focus.
@@ -99,6 +104,17 @@ impl Widget for FileTree<'_> {
             // rather than stopping at the end of the name.
             surface.set_style(line, style);
             Line::from(Span::styled(Self::label(entry), style)).render(line, surface);
+            if let Some(letter) = self.status.get(&entry.path) {
+                let mark = match letter {
+                    '?' | 'A' => self.theme.git_added,
+                    'D' => self.theme.git_removed,
+                    _ => self.theme.git_modified,
+                };
+                let x = line.right().saturating_sub(2);
+                if let Some(cell) = surface.cell_mut((x, y)) {
+                    cell.set_char(*letter).set_style(style.patch(mark));
+                }
+            }
         }
     }
 }

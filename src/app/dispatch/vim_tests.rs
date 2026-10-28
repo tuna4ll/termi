@@ -337,3 +337,23 @@ fn help_opens_as_a_searchable_read_only_buffer() {
     let line = app.buffer().document.line_string(caret(&app).line);
     assert!(line.to_lowercase().contains("registers"), "{line}");
 }
+
+#[test]
+fn bracket_c_walks_between_changes() {
+    use crate::git::Sign;
+    let mut app = editor("a\nb\nc\nd\ne");
+    app.buffers[0].git.base = Some(String::new());
+    app.buffers[0].git.signs = vec![
+        None,
+        Some(Sign::Added),
+        Some(Sign::Added),
+        None,
+        Some(Sign::Modified),
+    ];
+    typed(&mut app, "]c");
+    assert_eq!(caret(&app).line, 1);
+    typed(&mut app, "]c");
+    assert_eq!(caret(&app).line, 4);
+    typed(&mut app, "[c");
+    assert_eq!(caret(&app).line, 1);
+}

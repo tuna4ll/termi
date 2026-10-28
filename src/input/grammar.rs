@@ -330,6 +330,15 @@ impl Parser<'_> {
             },
             'z' => self.z_command()?,
             'g' => self.g_command(count)?,
+            '[' | ']' => self.bracket_command(key == ']')?,
+            _ => return Err(Stop::Invalid),
+        })
+    }
+
+    /// `]c`, `[c` and the other "next/previous thing" pairs.
+    fn bracket_command(&mut self, forward: bool) -> Step<Action> {
+        Ok(match self.char()? {
+            'c' => Action::JumpHunk { forward },
             _ => return Err(Stop::Invalid),
         })
     }

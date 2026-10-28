@@ -274,6 +274,9 @@ pub enum Action {
     RunCommand(String),
     ScrollCaret(ScreenRow),
     Fold(FoldCommand),
+    JumpHunk {
+        forward: bool,
+    },
     Reselect,
     JumpBack,
     JumpForward,

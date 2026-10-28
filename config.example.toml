@@ -25,6 +25,8 @@ auto_pairs = true        # close brackets and quotes as they are typed
 # Gutter.
 line_numbers = true
 relative_line_numbers = false
+sign_column = true       # a column for git and diagnostic signs
+git = true               # mark lines changed since the last commit, show the branch
 
 # Text area.
 word_wrap = false        # wrap long lines instead of scrolling sideways

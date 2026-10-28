@@ -59,6 +59,7 @@ COMMANDS  :w [path]  :q[!]  :wq  :wa  :qa[!]  :wqa  :e[!] path
           :set list  indentguides  minimap  matchbrackets
           :[range]s/a/b/[gciI]   ranges: 5,9  .,+3  %  '<,'>  'a,$
           :grep [text]  (Ctrl+G)   :greplace/a/b/   :help [topic]
+GIT       ]c [c next/previous change    :blame who changed this line
           :%s/pattern/replacement/g";
 
 /// The section headings of the help text, for `:help <Tab>`.
@@ -205,6 +206,18 @@ fn execute(app: &mut App, command: Command) {
             case_sensitive,
         } => super::substitute::project_replace(app, &pattern, &replacement, case_sensitive),
         Command::Grep(pattern) => app.open_grep(pattern.as_deref()),
+        Command::Blame => {
+            let line = app.window().cursor().head.line;
+            match app
+                .buffer()
+                .document
+                .path()
+                .and_then(|path| crate::git::blame(path, line))
+            {
+                Some(text) => app.info(text),
+                None => app.error("no blame — is the file in a git repository?"),
+            }
+        }
         Command::HelpTopic(topic) => open_help(app, Some(&topic)),
         Command::Earlier(count) => {
             if !app.edit().earlier(count) {
@@ -331,6 +344,9 @@ pub(super) fn write(app: &mut App, path: Option<PathBuf>, force: bool) {
             // again rather than left at whatever the old path implied.
             if renamed {
                 app.buffer_mut().detect_language();
+                if app.config.git {
+                    app.buffer_mut().refresh_git();
+                }
             }
             let name = app.buffer().document.display_name().to_string();
             let lines = app.buffer().document.len_lines();

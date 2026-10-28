@@ -47,6 +47,7 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
 
     while !app.should_quit() {
         app.write_swaps();
+        app.update_git();
         if let Some(job) = app.pending_sudo.take() {
             sudo_write(app, tui, job)?;
         }

@@ -142,6 +142,8 @@ pub struct App {
     pub tree: Option<Tree>,
     /// Highlighted row in the file tree.
     pub tree_selected: usize,
+    /// Git's status letter for each changed path the tree may show.
+    pub tree_status: HashMap<PathBuf, char>,
     /// Whether the file tree panel is drawn.
     pub tree_visible: bool,
     /// Tree entry awaiting a destination from the command line.
@@ -278,6 +280,7 @@ impl App {
             search: Search::default(),
             tree: None,
             tree_selected: 0,
+            tree_status: HashMap::new(),
             tree_visible: false,
             tree_source: None,
             pending_delete: None,
@@ -527,6 +530,9 @@ impl App {
         let limit = self.config.large_file_mb.saturating_mul(1 << 20);
         buffer.large = std::fs::metadata(&path).is_ok_and(|meta| meta.len() > limit);
         self.configure_buffer(&mut buffer, existed);
+        if self.config.git && !buffer.large && !cfg!(test) {
+            buffer.refresh_git();
+        }
         let undo_dir = self.undo_dir().filter(|_| !buffer.large);
         match undo_dir {
             Some(directory) => buffer.restore_history(&directory, self.config.undo_limit),
@@ -635,6 +641,24 @@ impl App {
                 "termi did not close cleanly while {name} had unsaved changes, {age} ago.\n\n:recover brings them back; :dropswap throws them away."
             ),
         );
+    }
+
+    /// Bring the git signs of every buffer on screen up to date with its text.
+    pub fn update_git(&mut self) {
+        const INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
+        if !self.config.git {
+            return;
+        }
+        let shown: Vec<BufferId> = self
+            .windows
+            .iter()
+            .map(|(_, window)| window.buffer)
+            .collect();
+        for index in shown {
+            if let Some(buffer) = self.buffers.get_mut(index) {
+                buffer.update_git_signs(INTERVAL);
+            }
+        }
     }
 
     /// Write swap files for buffers changed since their last one, and drop
@@ -1014,6 +1038,9 @@ impl App {
         };
         let selected = tree.path_at(self.tree_selected).map(Path::to_path_buf);
         tree.refresh();
+        if self.config.git && !cfg!(test) {
+            self.tree_status = crate::git::statuses(tree.root());
+        }
         let found = selected.and_then(|path| tree.index_of(&path));
         let last = tree.entries().len().saturating_sub(1);
         self.tree_selected = found.unwrap_or(self.tree_selected).min(last);

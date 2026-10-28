@@ -235,6 +235,7 @@ fn execute(app: &mut App, action: Action) -> Result<()> {
         Action::RunCommand(line) => commands::run(app, &line),
         Action::ScrollCaret(row) => motion::scroll_caret(app, row),
         Action::Fold(command) => motion::fold(app, command),
+        Action::JumpHunk { forward } => jump_hunk(app, forward),
         Action::Reselect => reselect(app),
         Action::JumpBack => motion::jump(app, true),
         Action::JumpForward => motion::jump(app, false),
@@ -652,6 +653,7 @@ fn toggle_tree(app: &mut App) {
     if app.tree.is_none() {
         let root = app.tree_root();
         app.tree = Some(crate::filesystem::tree::Tree::new(root));
+        app.refresh_tree();
     } else {
         // Opening the panel is the natural way to ask "what is in there now?",
         // so it re-reads even when the watcher is off or never saw the change.
@@ -940,6 +942,30 @@ fn play_macro(app: &mut App, register: char, count: usize) -> Result<()> {
     Ok(())
 }
 
+/// `]c` and `[c` — the next or previous run of lines changed since the last
+/// commit.
+fn jump_hunk(app: &mut App, forward: bool) {
+    let line = app.window().cursor().head.line;
+    let starts = crate::git::hunk_starts(&app.buffer().git.signs);
+    let target = if forward {
+        starts.into_iter().find(|start| *start > line)
+    } else {
+        starts.into_iter().rev().find(|start| *start < line)
+    };
+    match target {
+        Some(target) => {
+            app.window_mut().record_jump();
+            app.move_cursors(Motion::ToLine(target), false, false);
+        }
+        None if app.buffer().git.base.is_none() => app.info("not in a git repository"),
+        None => app.info(if forward {
+            "no change below"
+        } else {
+            "no change above"
+        }),
+    }
+}
+
 /// `*` and `#` — search for the word under the caret.
 fn search_word(app: &mut App, forward: bool, whole: bool) {
     let Some(word) = operator::word_under_caret(app) else {
@@ -1155,7 +1181,8 @@ mod tests {
         app.buffer().document.text().to_string()
     }
 
-    const GUTTER: u16 = 5;
+    /// The sign column and a three-digit line number with its space.
+    const GUTTER: u16 = 6;
 
     fn clicked_area(app: &mut App) -> Area {
         let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 12))

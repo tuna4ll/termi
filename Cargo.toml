@@ -59,6 +59,9 @@ mlua = { version = "0.12", features = ["lua54", "vendored", "send"] }
 # Persistent undo histories, sessions and the language server protocol.
 serde_json = "1"
 
+# Line diffs against the last commit, for the git signs in the gutter.
+similar = "3"
+
 anyhow = "1"
 
 [lints.rust]

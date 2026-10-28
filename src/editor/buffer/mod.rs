@@ -83,6 +83,21 @@ impl LocalOptions {
     }
 }
 
+/// What git says about a buffer's file.
+#[derive(Debug, Clone, Default)]
+pub struct GitState {
+    /// The file's text in the last commit; `None` outside a repository.
+    pub base: Option<String>,
+    /// How each line differs from `base`.
+    pub signs: Vec<Option<crate::git::Sign>>,
+    /// The document revision the signs were worked out for.
+    pub revision: Option<u64>,
+    /// When they were, so typing does not rediff on every keystroke.
+    pub computed: Option<Instant>,
+    /// The checked-out branch.
+    pub branch: Option<String>,
+}
+
 /// A document, the history that rewinds it and the highlighting derived from it.
 #[derive(Debug)]
 pub struct Buffer {
@@ -107,6 +122,8 @@ pub struct Buffer {
     pub swap: Option<(u64, PathBuf)>,
     /// When the swap file was last written.
     pub swap_written: Option<Instant>,
+    /// The file's state in git.
+    pub git: GitState,
 }
 
 impl Buffer {
@@ -126,6 +143,7 @@ impl Buffer {
             large: false,
             swap: None,
             swap_written: None,
+            git: GitState::default(),
         }
     }
 
@@ -195,8 +213,49 @@ impl Buffer {
         self.options.apply(&config)
     }
 
+    /// Read what git knows about the file again: its last committed text and
+    /// the branch. Done when the file opens and each time it is saved, which
+    /// also catches a commit made from a terminal pane in between.
+    pub fn refresh_git(&mut self) {
+        let Some(path) = self.document.path() else {
+            return;
+        };
+        self.git.base = crate::git::head_text(path);
+        self.git.branch = self
+            .git
+            .base
+            .as_ref()
+            .and_then(|_| crate::git::branch(path));
+        self.git.revision = None;
+        self.git.computed = None;
+    }
+
+    /// Diff against the last commit again if the text changed, at most every
+    /// `interval`.
+    pub fn update_git_signs(&mut self, interval: std::time::Duration) {
+        let Some(base) = self.git.base.as_ref() else {
+            self.git.signs.clear();
+            return;
+        };
+        let revision = self.document.revision();
+        if self.git.revision == Some(revision)
+            || self
+                .git
+                .computed
+                .is_some_and(|when| when.elapsed() < interval)
+        {
+            return;
+        }
+        self.git.signs = crate::git::signs(base, &self.document.text().to_string());
+        self.git.revision = Some(revision);
+        self.git.computed = Some(Instant::now());
+    }
+
     fn after_save(&mut self, undo_dir: Option<&Path>) {
         self.history.mark_saved();
+        if self.git.base.is_some() {
+            self.refresh_git();
+        }
         if let (Some(directory), Some(path)) = (undo_dir, self.document.path()) {
             // Losing the history on disk is not worth failing a save over.
             let _ = persist::save(directory, path, &self.document.disk_text(), &self.history);

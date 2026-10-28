@@ -140,6 +140,7 @@ pub fn parse(input: &str) -> Result<Command, String> {
         "help" | "h" if rest.is_empty() => Ok(Command::Help),
         "help" | "h" => Ok(Command::HelpTopic(rest.to_string())),
         "grep" | "rg" => Ok(Command::Grep(argument)),
+        "blame" => Ok(Command::Blame),
         "find" | "files" => Ok(Command::Find),
         "buffers" | "ls" => Ok(Command::Buffers),
         "commands" => Ok(Command::Commands),

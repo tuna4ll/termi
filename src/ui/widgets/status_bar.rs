@@ -39,6 +39,8 @@ pub struct StatusBar<'a> {
     pub encoding: Option<&'a str>,
     /// Whether the buffer is read-only.
     pub readonly: bool,
+    /// The git branch the file is on.
+    pub branch: Option<&'a str>,
     /// Number of active cursors; shown only when greater than one.
     pub cursor_count: usize,
     /// Characters covered by the selection; shown only when there is one.
@@ -93,12 +95,15 @@ impl Widget for StatusBar<'_> {
 
         let right = Line::from(Span::styled(
             format!(
-                " {}{}{}  {}  {}:{}  {}% ",
+                " {}{}{}{}  {}  {}:{}  {}% ",
                 if self.pending.is_empty() {
                     String::new()
                 } else {
                     format!("{}  ", self.pending)
                 },
+                self.branch
+                    .map(|branch| format!("⎇ {branch}  "))
+                    .unwrap_or_default(),
                 self.language,
                 self.encoding
                     .map(|encoding| format!("  {encoding}"))
