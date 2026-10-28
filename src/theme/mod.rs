@@ -62,6 +62,12 @@ pub struct Theme {
     pub search: Style,
     /// The match the cursor is currently on.
     pub search_active: Style,
+    /// Visible whitespace and indent guides.
+    pub whitespace: Style,
+    /// The bracket under the caret and its partner.
+    pub bracket_match: Style,
+    /// The line standing in for a closed fold.
+    pub fold: Style,
     /// Token styles.
     pub syntax: SyntaxStyles,
 }

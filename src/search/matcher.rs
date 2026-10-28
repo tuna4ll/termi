@@ -81,6 +81,40 @@ impl Matcher {
             .collect()
     }
 
+    /// The first match in `line` starting at or after character `from`, with
+    /// `replacement` expanded against it: its character span and the text to
+    /// put there. What `:s///c` asks about one at a time.
+    #[must_use]
+    pub fn next_match(
+        &self,
+        line: &str,
+        from: usize,
+        replacement: &str,
+    ) -> Option<(usize, usize, String)> {
+        let byte = line
+            .char_indices()
+            .nth(from)
+            .map_or(line.len(), |(index, _)| index);
+        let mut at = byte;
+        while at <= line.len() {
+            let captures = self.regex.captures_at(line, at)?;
+            let found = captures.get(0)?;
+            if found.is_empty() {
+                // An empty match replaces nothing a user could see; step past.
+                at = found.end() + line[found.end()..].chars().next().map_or(1, char::len_utf8);
+                continue;
+            }
+            let mut expanded = String::new();
+            captures.expand(replacement, &mut expanded);
+            return Some((
+                line[..found.start()].chars().count(),
+                line[..found.end()].chars().count(),
+                expanded,
+            ));
+        }
+        None
+    }
+
     /// Replace matches in `line`, returning the new line and how many were
     /// replaced.
     ///

@@ -15,6 +15,7 @@
 //! **Public API:** [`Search`], [`matcher::Matcher`].
 
 pub mod matcher;
+pub mod project;
 
 use crate::editor::document::Document;
 use crate::editor::selection::Range;
@@ -174,37 +175,6 @@ impl Search {
         total
     }
 
-    /// Replace matches across a line range, returning how many were replaced.
-    ///
-    /// Lines are rewritten back to front so the earlier line offsets stay valid.
-    pub fn replace_in(
-        &self,
-        document: &mut Document,
-        lines: std::ops::Range<usize>,
-        replacement: &str,
-        all: bool,
-    ) -> usize {
-        let Some(matcher) = self.matcher.as_ref() else {
-            return 0;
-        };
-        let mut total = 0;
-        for line in lines.rev() {
-            if line >= document.len_lines() {
-                continue;
-            }
-            let text = document.line_string(line);
-            let (replaced, count) = matcher.replace(&text, replacement, all);
-            if count == 0 {
-                continue;
-            }
-            let start = document.line_start(line);
-            document.remove(start, start + text.chars().count());
-            document.insert(start, &replaced);
-            total += count;
-        }
-        total
-    }
-
     /// Recompile after the query changed.
     fn compile(&mut self) {
         if self.query.is_empty() {
@@ -287,13 +257,5 @@ mod tests {
     fn counting_stops_at_the_cap() {
         let document = doc(&"x\n".repeat(100));
         assert_eq!(search("x").count(&document, 10), 10);
-    }
-
-    #[test]
-    fn replacement_rewrites_the_requested_lines_only() {
-        let mut document = doc("a\na\na");
-        let replaced = search("a").replace_in(&mut document, 0..2, "b", true);
-        assert_eq!(replaced, 2);
-        assert_eq!(document.text().to_string(), "b\nb\na");
     }
 }

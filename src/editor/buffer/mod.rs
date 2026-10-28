@@ -101,8 +101,10 @@ pub struct Buffer {
     /// Whether the file is big enough that highlighting, swap files and the
     /// like are switched off for it.
     pub large: bool,
-    /// The revision last written to the swap file.
-    pub swap_revision: Option<u64>,
+    /// The revision last written to the swap file, and the path it was
+    /// written for — the buffer may be renamed since, and the old swap file
+    /// must still be the one removed.
+    pub swap: Option<(u64, PathBuf)>,
     /// When the swap file was last written.
     pub swap_written: Option<Instant>,
 }
@@ -122,7 +124,7 @@ impl Buffer {
             marks: HashMap::new(),
             options: LocalOptions::default(),
             large: false,
-            swap_revision: None,
+            swap: None,
             swap_written: None,
         }
     }

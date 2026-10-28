@@ -62,6 +62,14 @@ pub fn dark() -> Theme {
             .fg(bg)
             .bg(Color::Rgb(0xe0, 0x8f, 0x68))
             .add_modifier(Modifier::BOLD),
+        whitespace: Style::new().fg(Color::Rgb(0x3b, 0x42, 0x4b)),
+        bracket_match: Style::new()
+            .bg(Color::Rgb(0x3b, 0x4a, 0x5f))
+            .add_modifier(Modifier::BOLD),
+        fold: Style::new()
+            .fg(fg_dim)
+            .bg(bg_soft)
+            .add_modifier(Modifier::ITALIC),
         syntax: SyntaxStyles {
             keyword: Style::new().fg(Color::Rgb(0xc5, 0x86, 0xc0)),
             type_name: Style::new().fg(Color::Rgb(0x4e, 0xc9, 0xb0)),
@@ -137,6 +145,14 @@ pub fn light() -> Theme {
             .fg(bg)
             .bg(Color::Rgb(0xd1, 0x71, 0x1c))
             .add_modifier(Modifier::BOLD),
+        whitespace: Style::new().fg(Color::Rgb(0xd0, 0xd0, 0xc8)),
+        bracket_match: Style::new()
+            .bg(Color::Rgb(0xc7, 0xdb, 0xf0))
+            .add_modifier(Modifier::BOLD),
+        fold: Style::new()
+            .fg(fg_dim)
+            .bg(bg_soft)
+            .add_modifier(Modifier::ITALIC),
         syntax: SyntaxStyles {
             keyword: Style::new().fg(Color::Rgb(0x8b, 0x2c, 0x9e)),
             type_name: Style::new().fg(Color::Rgb(0x0f, 0x6b, 0x63)),

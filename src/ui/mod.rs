@@ -25,8 +25,8 @@ use crate::editor::window::tree::Axis;
 use crate::theme::Theme;
 use crate::ui::layout::Panes;
 use crate::ui::widgets::{
-    CommandBar, EditorView, FileTree, PickerView, Popup, SearchBox, StatusBar, Tab, TabBar,
-    TerminalStatusBar, TerminalView, editor_view,
+    CommandBar, EditorView, FileTree, Minimap, PickerView, Popup, SearchBox, StatusBar, Tab,
+    TabBar, TerminalStatusBar, TerminalView, editor_view, minimap,
 };
 
 /// Where each part of the interface goes this frame.
@@ -136,11 +136,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         );
     }
 
-    if let Some(terminal) = app.terminal(app.windows.focus()) {
+    if let Some(completion) = app.completion.as_ref().filter(|_| app.mode.is_command()) {
+        draw_completion(frame, completion, &app.theme, regions.status);
+    } else if let Some(terminal) = app.terminal(app.windows.focus()) {
         frame.render_widget(
             TerminalStatusBar {
                 name: terminal.name(),
                 running: terminal.is_running(),
+                exit: terminal.exited_with(),
                 theme: &app.theme,
             },
             regions.status,
@@ -207,6 +210,46 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     }
 }
 
+/// The command-line completions, in place of the status bar while Tab is
+/// cycling through them, scrolled so the selected one is always in view.
+fn draw_completion(
+    frame: &mut Frame,
+    completion: &crate::app::complete::Completion,
+    theme: &Theme,
+    area: Rect,
+) {
+    use ratatui::text::{Line, Span};
+    let width = usize::from(area.width);
+    let mut start = 0;
+    if let Some(selected) = completion.selected {
+        // Walk forward until the selected candidate fits on the line.
+        while start < selected {
+            let used: usize = completion.candidates[start..=selected]
+                .iter()
+                .map(|candidate| candidate.chars().count() + 2)
+                .sum();
+            if used + 2 <= width {
+                break;
+            }
+            start += 1;
+        }
+    }
+    let mut spans = vec![Span::styled(
+        if start > 0 { "<" } else { " " },
+        theme.status,
+    )];
+    for (index, candidate) in completion.candidates.iter().enumerate().skip(start) {
+        let style = if Some(index) == completion.selected {
+            theme.status.patch(theme.selection)
+        } else {
+            theme.status
+        };
+        spans.push(Span::styled(format!(" {candidate} "), style));
+    }
+    frame.buffer_mut().set_style(area, theme.status);
+    frame.render_widget(Line::from(spans), area);
+}
+
 /// Bring every window up to date with the area it is about to be drawn in.
 ///
 /// This is the only part of rendering that mutates state, and it has to happen
@@ -216,9 +259,16 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 fn prepare(app: &mut App, panes: &Panes) {
     let focus = app.windows.focus();
 
-    for (id, rect) in &panes.windows {
+    for (id, pane) in &panes.windows {
+        let is_terminal = app.is_terminal(*id);
+        let rect = &if is_terminal {
+            *pane
+        } else {
+            text_area(&app.config, *pane).0
+        };
         app.windows.get_mut(*id).area = Area::new(rect.x, rect.y, rect.width, rect.height);
         if let Some(terminal) = app.terminal_mut(*id) {
+            terminal.exit_code();
             if let Err(error) = terminal.resize(rect.height, rect.width) {
                 app.error(error.to_string());
             }
@@ -235,6 +285,14 @@ fn prepare(app: &mut App, panes: &Panes) {
         let window = windows.get_mut(*id);
         let index = window.buffer;
         let config = &buffers[index].config(global);
+
+        // An edit that adds or removes lines may have moved the text under a
+        // closed fold; open them all rather than hide the wrong lines.
+        let lines = buffers[index].document.len_lines();
+        if window.fold_lines != lines {
+            window.folds.clear();
+            window.fold_lines = lines;
+        }
 
         // A window that did not make the last edit is never told that the text
         // moved underneath it, so its cursors are checked here instead. The
@@ -262,8 +320,13 @@ fn draw_windows(frame: &mut Frame, app: &App, panes: &Panes) -> Option<(u16, u16
     let mut caret = None;
     let selections = selection_ranges(app);
 
-    for (id, rect) in &panes.windows {
+    for (id, pane) in &panes.windows {
         let focused = *id == focus;
+        let rect = &if app.is_terminal(*id) {
+            *pane
+        } else {
+            text_area(&app.config, *pane).0
+        };
         if let Some(terminal) = app.terminal(*id) {
             let view = TerminalView {
                 terminal,
@@ -278,6 +341,22 @@ fn draw_windows(frame: &mut Frame, app: &App, panes: &Panes) -> Option<(u16, u16
         }
         let window = app.windows.get(*id);
         let config = app.buffer_config(window.buffer);
+        let buffer = &app.buffers[window.buffer];
+        let folds =
+            crate::editor::fold::closed_ranges(&buffer.document, &window.folds, config.tab_width);
+        let brackets = (focused && config.match_brackets)
+            .then(|| bracket_pair(app))
+            .flatten();
+        if let (Some(area), true) = (text_area(&app.config, *pane).1, !app.is_terminal(*id)) {
+            frame.render_widget(
+                Minimap {
+                    buffer,
+                    window,
+                    theme: &app.theme,
+                },
+                area,
+            );
+        }
         let view = EditorView {
             buffer: &app.buffers[window.buffer],
             window,
@@ -290,6 +369,8 @@ fn draw_windows(frame: &mut Frame, app: &App, panes: &Panes) -> Option<(u16, u16
             selections: if focused { &selections } else { &[] },
             search: (focused && app.search.is_active()).then_some(&app.search),
             active_match: if focused { active_match(app) } else { None },
+            brackets,
+            folds: &folds,
         };
         if focused {
             caret = view.caret_position(*rect);
@@ -297,6 +378,41 @@ fn draw_windows(frame: &mut Frame, app: &App, panes: &Panes) -> Option<(u16, u16
         frame.render_widget(view, *rect);
     }
     caret
+}
+
+/// Split a window's pane into the text and, when it is on and there is room,
+/// the minimap beside it.
+fn text_area(config: &crate::config::Config, pane: Rect) -> (Rect, Option<Rect>) {
+    if !config.minimap || pane.width < minimap::WIDTH * 4 {
+        return (pane, None);
+    }
+    let text = Rect {
+        width: pane.width - minimap::WIDTH,
+        ..pane
+    };
+    let map = Rect {
+        x: pane.x + text.width,
+        width: minimap::WIDTH,
+        ..pane
+    };
+    (text, Some(map))
+}
+
+/// The bracket under the caret — or, in insert mode, just before it — and
+/// its partner.
+fn bracket_pair(app: &App) -> Option<(usize, usize)> {
+    use crate::editor::cursor::scan;
+    let document = &app.buffer().document;
+    let head = document.pos_to_char(app.window().cursor().head);
+    let candidates = [
+        Some(head),
+        head.checked_sub(1).filter(|_| app.mode.is_insert()),
+    ];
+    candidates.into_iter().flatten().find_map(|index| {
+        let ch = document.text().get_char(index)?;
+        scan::partner(ch)?;
+        scan::matching_bracket(document, index).map(|other| (index, other))
+    })
 }
 
 /// Draw the rules between neighbouring windows.
@@ -437,6 +553,93 @@ mod tests {
         (0..surface.area.width)
             .filter_map(|x| surface.cell((x, y)).map(|cell| cell.symbol().to_string()))
             .collect()
+    }
+
+    #[test]
+    fn a_closed_fold_shows_one_line_and_what_it_hides() {
+        let mut app = app("head {\n    a\n    b\n}\ntail");
+        crate::app::dispatch::apply(
+            &mut app,
+            crate::input::Action::Fold(crate::input::FoldCommand::Close),
+        )
+        .expect("close fold");
+        let surface = render(&mut app, 30, 8);
+        assert!(
+            row(&surface, 0).starts_with("head {"),
+            "{}",
+            row(&surface, 0)
+        );
+        assert!(
+            row(&surface, 0).contains("⋯ 2 lines"),
+            "{}",
+            row(&surface, 0)
+        );
+        assert!(row(&surface, 1).starts_with('}'), "{}", row(&surface, 1));
+        assert!(row(&surface, 2).starts_with("tail"));
+    }
+
+    #[test]
+    fn moving_down_steps_over_a_closed_fold() {
+        let mut app = app("head {\n    a\n    b\n}");
+        crate::app::dispatch::apply(
+            &mut app,
+            crate::input::Action::Fold(crate::input::FoldCommand::Close),
+        )
+        .expect("close fold");
+        crate::app::dispatch::apply(
+            &mut app,
+            crate::input::Action::Move(crate::editor::cursor::Motion::Down(1)),
+        )
+        .expect("move down");
+        assert_eq!(app.window().cursor().head.line, 3);
+    }
+
+    #[test]
+    fn whitespace_and_indent_guides_are_drawn_on_request() {
+        let mut app = app("\tx  \n        y");
+        app.config.show_whitespace = true;
+        app.config.indent_guides = true;
+        let surface = render(&mut app, 20, 6);
+        assert!(row(&surface, 0).starts_with('→'), "{}", row(&surface, 0));
+        assert!(row(&surface, 0).contains("x··"), "{}", row(&surface, 0));
+        assert_eq!(
+            row(&surface, 1).chars().nth(4),
+            Some('│'),
+            "{}",
+            row(&surface, 1)
+        );
+    }
+
+    #[test]
+    fn the_minimap_draws_beside_the_text() {
+        let mut app = app(&"let value = 1;\n".repeat(30));
+        app.config.minimap = true;
+        let surface = render(&mut app, 60, 10);
+        let line = row(&surface, 0);
+        assert!(
+            line.chars()
+                .any(|ch| ('\u{2801}'..='\u{28ff}').contains(&ch)),
+            "{line}"
+        );
+        assert!(app.window().area.width < 60, "the text gave up room");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_finished_command_reports_its_exit_code() {
+        let mut app = app("editor");
+        app.open_terminal(Some("exit 3"))
+            .expect("open a terminal window");
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let surface = render(&mut app, 60, 10);
+            let status = row(&surface, 8);
+            if status.contains("exited with code 3") {
+                break;
+            }
+            assert!(Instant::now() < deadline, "status never reported: {status}");
+            std::thread::sleep(Duration::from_millis(20));
+        }
     }
 
     #[cfg(unix)]

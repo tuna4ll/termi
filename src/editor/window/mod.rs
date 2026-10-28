@@ -125,6 +125,11 @@ pub struct Window {
     jump_index: usize,
     /// The last visual selection, for `gv`.
     pub last_visual: Option<VisualMemory>,
+    /// First lines of the folds closed in this window.
+    pub folds: std::collections::BTreeSet<usize>,
+    /// The line count the folds were closed against; an edit that changes it
+    /// may have moved the lines under them, so they are opened again.
+    pub fold_lines: usize,
 }
 
 /// One entry in a window's jump list.
@@ -164,6 +169,8 @@ impl Window {
             jumps: Vec::new(),
             jump_index: 0,
             last_visual: None,
+            folds: std::collections::BTreeSet::new(),
+            fold_lines: 0,
         }
     }
 
@@ -228,6 +235,7 @@ impl Window {
         if self.buffer == buffer {
             return;
         }
+        self.folds.clear();
         self.anchors.insert(
             self.buffer,
             Anchor {

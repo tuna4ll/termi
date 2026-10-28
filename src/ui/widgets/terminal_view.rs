@@ -82,6 +82,8 @@ pub struct TerminalStatusBar<'a> {
     pub name: &'a str,
     /// Whether the process still owns the PTY output stream.
     pub running: bool,
+    /// How the process ended, once it has.
+    pub exit: Option<u32>,
     /// Colours shared with the editor status bar.
     pub theme: &'a Theme,
 }
@@ -98,13 +100,20 @@ impl Widget for TerminalStatusBar<'_> {
         ])
         .render(area, surface);
 
-        let state = if self.running { "running" } else { "exited" };
-        Line::from(Span::styled(
-            format!(" {state}  Ctrl+W: windows "),
-            self.theme.status,
-        ))
-        .right_aligned()
-        .render(area, surface);
+        let state = match (self.running, self.exit) {
+            (true, _) => "running".to_string(),
+            (false, Some(0)) => "exited successfully".to_string(),
+            (false, Some(code)) => format!("exited with code {code}"),
+            (false, None) => "exited".to_string(),
+        };
+        let style = if matches!(self.exit, Some(code) if code != 0) {
+            self.theme.status.patch(self.theme.command_error)
+        } else {
+            self.theme.status
+        };
+        Line::from(Span::styled(format!(" {state}  Ctrl+W: windows "), style))
+            .right_aligned()
+            .render(area, surface);
     }
 }
 

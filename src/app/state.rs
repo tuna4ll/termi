@@ -125,6 +125,16 @@ pub struct App {
     pub mappings_changed: bool,
     /// How the editor was started.
     pub startup: Startup,
+    /// A `:s///c` asking about one match at a time.
+    pub replace_session: Option<super::substitute::ReplaceSession>,
+    /// A Tab completion in progress on the command line.
+    pub completion: Option<super::complete::Completion>,
+    /// Command lines and searches, kept across sessions.
+    pub history: super::complete::History,
+    /// Which history entry Up and Down are showing.
+    pub history_cursor: Option<usize>,
+    /// What was typed before Up began travelling through the history.
+    pub history_draft: String,
     /// Incremental search state, kept across searches so `n` can repeat one.
     pub search: Search,
     /// File browser, built on first use and kept afterwards so the expanded
@@ -177,6 +187,7 @@ impl App {
 
         let mut app = Self::assemble(config, theme);
         app.startup = startup;
+        app.history = super::complete::History::load();
         let mapping_error = app.compile_mappings();
         let script_error = crate::syntax::load_errors().first().cloned();
         if let Some(message) = config_error
@@ -259,6 +270,11 @@ impl App {
             mappings: crate::input::mappings::Mappings::default(),
             mappings_changed: false,
             startup: Startup::default(),
+            replace_session: None,
+            completion: None,
+            history: super::complete::History::default(),
+            history_cursor: None,
+            history_draft: String::new(),
             search: Search::default(),
             tree: None,
             tree_selected: 0,
@@ -487,10 +503,21 @@ impl App {
     /// # Errors
     /// Returns an error if the file exists but cannot be read.
     pub fn open(&mut self, path: PathBuf) -> Result<()> {
+        let index = self.load(path.clone())?;
+        self.windows.focused_mut().show(index);
+        self.record_recent(path);
+        Ok(())
+    }
+
+    /// The buffer for `path`, opening it without showing it if needed — for
+    /// work that touches files the user is not looking at, such as a
+    /// project-wide replace.
+    ///
+    /// # Errors
+    /// Returns an error if the file exists but cannot be read.
+    pub fn load(&mut self, path: PathBuf) -> Result<BufferId> {
         if let Some(index) = self.index_of(&path) {
-            self.windows.focused_mut().show(index);
-            self.record_recent(path);
-            return Ok(());
+            return Ok(index);
         }
         let existed = path.exists();
         let mut buffer = Buffer::new(Document::open(path.clone())?);
@@ -521,13 +548,10 @@ impl App {
             for (_, window) in self.windows.iter_mut() {
                 window.reset(0);
             }
-        } else {
-            self.buffers.push(buffer);
-            let last = self.buffers.len() - 1;
-            self.windows.focused_mut().show(last);
+            return Ok(0);
         }
-        self.record_recent(path);
-        Ok(())
+        self.buffers.push(buffer);
+        Ok(self.buffers.len() - 1)
     }
 
     /// Settle a freshly opened buffer's own settings: what `.editorconfig`
@@ -627,14 +651,22 @@ impl App {
             if buffer.large {
                 continue;
             }
+            // A swap file written under the buffer's old name is stale
+            // either way once the buffer has a new one.
+            if let Some((_, written_for)) = &buffer.swap
+                && (*written_for != path || !buffer.document.is_dirty())
+            {
+                crate::filesystem::swap::remove(&directory, written_for);
+                buffer.swap = None;
+            }
             if !buffer.document.is_dirty() {
-                if buffer.swap_revision.take().is_some() {
-                    crate::filesystem::swap::remove(&directory, &path);
-                }
                 continue;
             }
             let revision = buffer.document.revision();
-            if buffer.swap_revision == Some(revision)
+            if buffer
+                .swap
+                .as_ref()
+                .is_some_and(|(written, _)| *written == revision)
                 || buffer
                     .swap_written
                     .is_some_and(|written| now.duration_since(written) < SWAP_INTERVAL)
@@ -643,7 +675,7 @@ impl App {
             }
             let text = buffer.document.text().to_string();
             if crate::filesystem::swap::write(&directory, &path, &text).is_ok() {
-                buffer.swap_revision = Some(revision);
+                buffer.swap = Some((revision, path));
                 buffer.swap_written = Some(now);
             }
         }
@@ -655,10 +687,8 @@ impl App {
             return;
         };
         for buffer in &mut self.buffers {
-            if buffer.swap_revision.take().is_some()
-                && let Some(path) = buffer.document.path()
-            {
-                crate::filesystem::swap::remove(&directory, path);
+            if let Some((_, path)) = buffer.swap.take() {
+                crate::filesystem::swap::remove(&directory, &path);
             }
         }
     }
@@ -669,9 +699,59 @@ impl App {
             PickerKind::Buffers => self.buffer_picker(),
             PickerKind::Commands => command_picker(),
             PickerKind::Themes => theme_picker(),
+            PickerKind::Grep => Picker::live("grep"),
         };
         self.picker = Some(picker);
         self.mode = Mode::Picker;
+    }
+
+    /// Open the project search, with a query already typed if one is given.
+    pub fn open_grep(&mut self, query: Option<&str>) {
+        self.open_picker(PickerKind::Grep);
+        if let (Some(picker), Some(query)) = (self.picker.as_mut(), query) {
+            picker.query = query.to_string();
+        }
+        self.refresh_live_picker();
+    }
+
+    /// Search the project again for a live picker's query.
+    ///
+    /// Queries shorter than two characters match too much to be useful and
+    /// would walk the whole project on every keystroke, so they show nothing.
+    pub fn refresh_live_picker(&mut self) {
+        const HIT_LIMIT: usize = 500;
+        let Some(picker) = self.picker.as_mut().filter(|picker| picker.live) else {
+            return;
+        };
+        if picker.query.chars().count() < 2 {
+            picker.set_items(Vec::new());
+            return;
+        }
+        let Ok(matcher) = crate::search::Matcher::new(
+            &picker.query,
+            self.search.regex,
+            self.search.case_sensitive,
+        ) else {
+            picker.set_items(Vec::new());
+            return;
+        };
+        let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let items = crate::search::project::search(&root, &matcher, HIT_LIMIT)
+            .into_iter()
+            .map(|hit| {
+                let name = hit
+                    .path
+                    .strip_prefix(&root)
+                    .unwrap_or(&hit.path)
+                    .display()
+                    .to_string();
+                PickerItem::new(
+                    format!("{name}:{}: {}", hit.line + 1, hit.text),
+                    PickerTarget::Location(hit.path, Position::new(hit.line, hit.col)),
+                )
+            })
+            .collect();
+        picker.set_items(items);
     }
 
     fn file_picker(&self) -> Picker {
@@ -727,10 +807,7 @@ impl App {
     }
 
     fn close_buffer(&mut self, index: BufferId) {
-        if let (Some(directory), Some(path)) =
-            (self.swap_dir(), self.buffers[index].document.path())
-            && self.buffers[index].swap_revision.is_some()
-        {
+        if let (Some(directory), Some((_, path))) = (self.swap_dir(), &self.buffers[index].swap) {
             crate::filesystem::swap::remove(&directory, path);
         }
         if self.buffers.len() == 1 {
@@ -966,7 +1043,9 @@ impl App {
         self.quit
     }
 
-    fn index_of(&self, path: &Path) -> Option<BufferId> {
+    /// The open buffer showing `path`, if there is one.
+    #[must_use]
+    pub fn index_of(&self, path: &Path) -> Option<BufferId> {
         self.buffers
             .iter()
             .position(|b| b.document.path() == Some(path))
@@ -1001,8 +1080,25 @@ fn describe_age(seconds: u64) -> String {
 
 fn command_picker() -> Picker {
     let commands = [
-        "find", "buffers", "themes", "help", "write", "quit", "split", "vsplit", "close", "only",
+        "find",
+        "buffers",
+        "themes",
+        "grep",
+        "help",
+        "write",
+        "wall",
+        "quit",
+        "qall",
+        "split",
+        "vsplit",
+        "close",
+        "only",
         "terminal",
+        "config",
+        "config reload",
+        "recover",
+        "earlier",
+        "later",
     ];
     let items = commands
         .into_iter()

@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use super::Command;
+use super::{Address, Base, Command, LineRange};
 use crate::editor::window::Axis;
 
 /// Parse a command line, without the leading `:`.
@@ -24,14 +24,54 @@ pub fn parse(input: &str) -> Result<Command, String> {
         return Err("empty command".to_string());
     }
 
-    // `:42` jumps to a line. Checked first because a bare number is not a name.
-    if let Ok(line) = input.parse::<usize>() {
-        return Ok(Command::GotoLine(line.saturating_sub(1)));
+    // A line range comes first: `:42` jumps to a line, `:%s` substitutes in
+    // all of them, `:'<,'>s` in the last selection.
+    let (range, input) = parse_range(input)?;
+    if input.is_empty() {
+        return match range {
+            Some(LineRange {
+                end:
+                    Address {
+                        base: Base::Line(line),
+                        offset,
+                    },
+                ..
+            }) => Ok(Command::GotoLine(
+                line.saturating_sub(1).saturating_add_signed(offset),
+            )),
+            Some(range) => Ok(Command::GotoAddress(range.end)),
+            None => Err("empty command".to_string()),
+        };
     }
-    if (input.starts_with('s') || input.starts_with("%s"))
-        && let Some(command) = parse_substitute(input)
+    if input.starts_with('s')
+        && let Some(command) = parse_substitute(input, range)
     {
-        return Ok(command);
+        return command;
+    }
+    if range.is_some() {
+        return Err("only :s takes a range".to_string());
+    }
+    if let Some(rest) = input
+        .strip_prefix("greplace")
+        .or_else(|| input.strip_prefix("gs"))
+        && rest
+            .chars()
+            .next()
+            .is_some_and(|ch| !ch.is_alphanumeric() && !ch.is_whitespace())
+    {
+        return match parse_substitute(&format!("s{rest}"), None) {
+            Some(Ok(Command::Substitute {
+                pattern,
+                replacement,
+                case_sensitive,
+                ..
+            })) => Ok(Command::ProjectReplace {
+                pattern,
+                replacement,
+                case_sensitive,
+            }),
+            _ => Err("usage: :greplace/pattern/replacement/".to_string()),
+        };
     }
 
     let (head, rest) = match input.split_once(char::is_whitespace) {
@@ -97,7 +137,9 @@ pub fn parse(input: &str) -> Result<Command, String> {
         },
         "earlier" | "ea" => count_argument(rest).map(Command::Earlier),
         "later" | "lat" => count_argument(rest).map(Command::Later),
-        "help" | "h" => Ok(Command::Help),
+        "help" | "h" if rest.is_empty() => Ok(Command::Help),
+        "help" | "h" => Ok(Command::HelpTopic(rest.to_string())),
+        "grep" | "rg" => Ok(Command::Grep(argument)),
         "find" | "files" => Ok(Command::Find),
         "buffers" | "ls" => Ok(Command::Buffers),
         "commands" => Ok(Command::Commands),
@@ -144,13 +186,81 @@ fn parse_set(rest: &str, persist: bool) -> Result<Command, String> {
     })
 }
 
-/// `[%]s/pattern/replacement[/flags]`, with any single character as delimiter.
-fn parse_substitute(input: &str) -> Option<Command> {
-    let whole_file = input.starts_with('%');
-    let body = input.strip_prefix('%').unwrap_or(input).strip_prefix('s')?;
+/// Read a line range off the front of a command line, returning it and the
+/// rest of the line.
+///
+/// # Errors
+/// Returns a message for an address that starts but does not finish, such as
+/// a `'` without a mark name.
+fn parse_range(input: &str) -> Result<(Option<LineRange>, &str), String> {
+    if let Some(rest) = input.strip_prefix('%') {
+        let whole = LineRange {
+            start: Address {
+                base: Base::Line(1),
+                offset: 0,
+            },
+            end: Address {
+                base: Base::Last,
+                offset: 0,
+            },
+        };
+        return Ok((Some(whole), rest.trim_start()));
+    }
+    let Some((start, rest)) = parse_address(input)? else {
+        return Ok((None, input));
+    };
+    if let Some(after) = rest.strip_prefix(',') {
+        let Some((end, rest)) = parse_address(after)? else {
+            return Err("the range is missing its end".to_string());
+        };
+        return Ok((Some(LineRange { start, end }), rest.trim_start()));
+    }
+    Ok((Some(LineRange { start, end: start }), rest.trim_start()))
+}
 
+fn parse_address(input: &str) -> Result<Option<(Address, &str)>, String> {
+    let digits = input.chars().take_while(char::is_ascii_digit).count();
+    let (base, mut rest) = if digits > 0 {
+        let line = input[..digits]
+            .parse::<usize>()
+            .map_err(|_| "line number too large".to_string())?;
+        (Base::Line(line), &input[digits..])
+    } else if let Some(rest) = input.strip_prefix('.') {
+        (Base::Current, rest)
+    } else if let Some(rest) = input.strip_prefix('$') {
+        (Base::Last, rest)
+    } else if let Some(rest) = input.strip_prefix('\'') {
+        let mark = rest.chars().next().ok_or("a mark name must follow '")?;
+        (Base::Mark(mark), &rest[mark.len_utf8()..])
+    } else if input.starts_with(['+', '-']) {
+        (Base::Current, input)
+    } else {
+        return Ok(None);
+    };
+    let mut offset = 0isize;
+    while let Some(sign) = rest.chars().next().filter(|ch| matches!(ch, '+' | '-')) {
+        let after = &rest[1..];
+        let count = after.chars().take_while(char::is_ascii_digit).count();
+        let amount = if count == 0 {
+            1
+        } else {
+            after[..count].parse::<isize>().unwrap_or(0)
+        };
+        offset += if sign == '+' { amount } else { -amount };
+        rest = &after[count..];
+    }
+    Ok(Some((Address { base, offset }, rest)))
+}
+
+/// `s/pattern/replacement[/flags]`, with any single character as delimiter.
+///
+/// Returns `None` when the text is not a substitution at all — `:set` and
+/// `:split` also start with an `s` — and `Some(Err)` for one that is but is
+/// written wrongly.
+fn parse_substitute(input: &str, range: Option<LineRange>) -> Option<Result<Command, String>> {
+    let body = input.strip_prefix('s')?;
     let delimiter = body.chars().next()?;
-    if delimiter.is_alphanumeric() {
+    if delimiter.is_alphanumeric() || delimiter.is_whitespace() {
         // `:set`-style words must not be mistaken for a substitution.
         return None;
     }
@@ -178,17 +288,29 @@ fn parse_substitute(input: &str) -> Option<Command> {
 
     let pattern = fields.first()?.clone();
     if pattern.is_empty() {
-        return None;
+        return Some(Err("the pattern is empty".to_string()));
     }
     let replacement = fields.get(1).cloned().unwrap_or_default();
-    let all = fields.get(2).is_some_and(|flags| flags.contains('g'));
+    let flags = fields.get(2).cloned().unwrap_or_default();
+    if let Some(unknown) = flags.chars().find(|flag| !"gciI".contains(*flag)) {
+        return Some(Err(format!("unknown flag {unknown} — use g, c, i or I")));
+    }
+    let case_sensitive = if flags.contains('I') {
+        Some(true)
+    } else if flags.contains('i') {
+        Some(false)
+    } else {
+        None
+    };
 
-    Some(Command::Substitute {
+    Some(Ok(Command::Substitute {
         pattern,
         replacement,
-        all,
-        whole_file,
-    })
+        all: flags.contains('g'),
+        confirm: flags.contains('c'),
+        case_sensitive,
+        range,
+    }))
 }
 
 #[cfg(test)]
@@ -347,38 +469,102 @@ mod tests {
         );
     }
 
+    fn at(base: Base) -> Address {
+        Address { base, offset: 0 }
+    }
+
     #[test]
     fn substitute_reads_pattern_replacement_and_flags() {
         assert_eq!(
-            parse("%s/foo/bar/g"),
+            parse("%s/foo/bar/gc"),
             Ok(Command::Substitute {
                 pattern: "foo".to_string(),
                 replacement: "bar".to_string(),
                 all: true,
-                whole_file: true,
+                confirm: true,
+                case_sensitive: None,
+                range: Some(LineRange {
+                    start: at(Base::Line(1)),
+                    end: at(Base::Last),
+                }),
             })
         );
         assert_eq!(
-            parse("s/foo/bar"),
+            parse("s/foo/bar/i"),
             Ok(Command::Substitute {
                 pattern: "foo".to_string(),
                 replacement: "bar".to_string(),
                 all: false,
-                whole_file: false,
+                confirm: false,
+                case_sensitive: Some(false),
+                range: None,
             })
         );
+        assert!(parse("s/foo/bar/z").is_err());
     }
 
     #[test]
     fn substitute_keeps_regex_escapes_but_unescapes_the_delimiter() {
-        assert_eq!(
+        assert!(matches!(
             parse(r"%s/\d+\/x/n/"),
-            Ok(Command::Substitute {
-                pattern: r"\d+/x".to_string(),
-                replacement: "n".to_string(),
-                all: false,
-                whole_file: true,
+            Ok(Command::Substitute { pattern, .. }) if pattern == r"\d+/x"
+        ));
+    }
+
+    #[test]
+    fn ranges_take_lines_marks_and_offsets() {
+        let range = |text: &str| match parse(text) {
+            Ok(Command::Substitute { range, .. }) => range,
+            other => panic!("{text}: {other:?}"),
+        };
+        assert_eq!(
+            range("'<,'>s/a/b/"),
+            Some(LineRange {
+                start: at(Base::Mark('<')),
+                end: at(Base::Mark('>')),
             })
+        );
+        assert_eq!(
+            range(".,.+2s/a/b/"),
+            Some(LineRange {
+                start: at(Base::Current),
+                end: Address {
+                    base: Base::Current,
+                    offset: 2
+                },
+            })
+        );
+        assert_eq!(
+            range("3,$-1s/a/b/"),
+            Some(LineRange {
+                start: at(Base::Line(3)),
+                end: Address {
+                    base: Base::Last,
+                    offset: -1
+                },
+            })
+        );
+        assert_eq!(parse("42"), Ok(Command::GotoLine(41)));
+        assert_eq!(parse("3,4"), Ok(Command::GotoLine(3)));
+        assert_eq!(parse("$"), Ok(Command::GotoAddress(at(Base::Last))));
+        assert!(parse("3,4w").is_err());
+    }
+
+    #[test]
+    fn project_wide_commands() {
+        assert_eq!(parse("grep todo"), Ok(Command::Grep(Some("todo".into()))));
+        assert_eq!(parse("grep"), Ok(Command::Grep(None)));
+        assert_eq!(
+            parse("greplace/old/new/I"),
+            Ok(Command::ProjectReplace {
+                pattern: "old".into(),
+                replacement: "new".into(),
+                case_sensitive: Some(true),
+            })
+        );
+        assert_eq!(
+            parse("help ranges"),
+            Ok(Command::HelpTopic("ranges".into()))
         );
     }
 

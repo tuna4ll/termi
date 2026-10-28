@@ -28,6 +28,10 @@ relative_line_numbers = false
 
 # Text area.
 word_wrap = false        # wrap long lines instead of scrolling sideways
+show_whitespace = false  # draw tabs and trailing spaces as visible marks
+indent_guides = false    # faint rules at each indentation level
+match_brackets = true    # highlight the bracket matching the one under the caret
+minimap = false          # a miniature of the file beside each window
 highlight_current_line = true
 scrolloff = 3            # lines of context kept above and below the cursor
 syntax_highlighting = true

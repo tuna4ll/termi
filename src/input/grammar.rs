@@ -22,7 +22,9 @@
 
 use crossterm::event::{KeyCode, KeyEvent};
 
-use super::{Action, CaseChange, FindSpec, Goal, Operator, ScreenRow, Target, is_plain};
+use super::{
+    Action, CaseChange, FindSpec, FoldCommand, Goal, Operator, ScreenRow, Target, is_plain,
+};
 use crate::app::mode::Mode;
 use crate::editor::cursor::Motion;
 use crate::editor::textobject::TextObject;
@@ -338,6 +340,11 @@ impl Parser<'_> {
             'z' | '.' => Action::ScrollCaret(ScreenRow::Middle),
             't' => Action::ScrollCaret(ScreenRow::Top),
             'b' | '-' => Action::ScrollCaret(ScreenRow::Bottom),
+            'a' => Action::Fold(FoldCommand::Toggle),
+            'c' => Action::Fold(FoldCommand::Close),
+            'o' => Action::Fold(FoldCommand::Open),
+            'R' => Action::Fold(FoldCommand::OpenAll),
+            'M' => Action::Fold(FoldCommand::CloseAll),
             _ => return Err(Stop::Invalid),
         })
     }

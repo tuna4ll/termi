@@ -292,3 +292,48 @@ fn g_minus_reaches_an_abandoned_branch() {
     typed(&mut app, "g+");
     assert_eq!(text(&app), "xyz");
 }
+
+#[test]
+fn substitute_over_a_range_is_one_undo_step() {
+    let mut app = editor("a a\na a\na a\na a");
+    typed(&mut app, ":2,3s/a/b/g<CR>");
+    assert_eq!(text(&app), "a a\nb b\nb b\na a");
+    typed(&mut app, "u");
+    assert_eq!(text(&app), "a a\na a\na a\na a");
+}
+
+#[test]
+fn colon_from_a_selection_works_on_its_lines() {
+    let mut app = editor("x\nx\nx");
+    typed(&mut app, "jVj:s/x/y/<CR>");
+    assert_eq!(text(&app), "x\ny\ny");
+}
+
+#[test]
+fn confirmed_substitution_asks_about_each_match() {
+    let mut app = editor("cat cat cat");
+    typed(&mut app, ":s/cat/dog/gc<CR>");
+    assert_eq!(app.mode, Mode::Replace);
+    typed(&mut app, "yny");
+    assert_eq!(text(&app), "dog cat dog");
+    assert_eq!(app.mode, Mode::Normal);
+    typed(&mut app, "u");
+    assert_eq!(text(&app), "cat cat cat");
+}
+
+#[test]
+fn confirming_all_replaces_the_rest() {
+    let mut app = editor("a\na\na");
+    typed(&mut app, ":%s/a/b/c<CR>na");
+    assert_eq!(text(&app), "a\nb\nb");
+}
+
+#[test]
+fn help_opens_as_a_searchable_read_only_buffer() {
+    let mut app = editor("text");
+    typed(&mut app, ":help registers<CR>");
+    assert_eq!(app.buffer().document.display_name(), "[help]");
+    assert!(app.buffer().document.is_readonly());
+    let line = app.buffer().document.line_string(caret(&app).line);
+    assert!(line.to_lowercase().contains("registers"), "{line}");
+}

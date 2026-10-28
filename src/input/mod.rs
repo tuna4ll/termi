@@ -142,6 +142,21 @@ impl FindSpec {
     }
 }
 
+/// What a `z` fold command does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoldCommand {
+    /// `za` — open the fold under the caret if it is closed, close it if not.
+    Toggle,
+    /// `zc`.
+    Close,
+    /// `zo`.
+    Open,
+    /// `zR` — open every fold.
+    OpenAll,
+    /// `zM` — close every fold.
+    CloseAll,
+}
+
 /// A row of the window, for `H`, `M`, `L` and `zt`, `zz`, `zb`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScreenRow {
@@ -258,11 +273,13 @@ pub enum Action {
     },
     RunCommand(String),
     ScrollCaret(ScreenRow),
+    Fold(FoldCommand),
     Reselect,
     JumpBack,
     JumpForward,
     InsertText(String),
     ToggleComment,
+    ReplaceAnswer(char),
     Extend(Motion),
     Select(Motion),
     SelectAll,
@@ -369,6 +386,15 @@ pub enum Action {
     CommandBackspace,
     CommandSubmit,
     CommandCancel,
+    CommandComplete {
+        forward: bool,
+    },
+    CommandHistory {
+        back: bool,
+    },
+    SearchHistory {
+        back: bool,
+    },
 }
 
 #[derive(Debug, Default)]
@@ -484,6 +510,7 @@ impl Input {
             Mode::Tree => keymap::tree(key),
             Mode::Picker => keymap::picker(key),
             Mode::Confirm => keymap::confirm(key),
+            Mode::Replace => keymap::replace(key),
             Mode::Terminal => keymap::terminal(key, &mut self.pending),
         };
         if matches!(action, Action::EnterMode(_)) {

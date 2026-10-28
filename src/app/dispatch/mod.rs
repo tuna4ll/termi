@@ -172,6 +172,11 @@ fn execute(app: &mut App, action: Action) -> Result<()> {
         Action::EnterMode(Mode::VisualBlock) if app.mode == Mode::VisualBlock => {
             enter_mode(app, Mode::Normal);
         }
+        Action::EnterMode(Mode::Command) if app.mode.is_visual() => {
+            // `:` from a selection works on its lines, the way vi spells it.
+            enter_mode(app, Mode::Command);
+            app.command_line = "'<,'>".to_string();
+        }
         Action::EnterMode(mode) => enter_mode(app, mode),
         Action::Move(motion) => {
             if motion.is_jump() && !app.mode.is_insert() {
@@ -229,6 +234,7 @@ fn execute(app: &mut App, action: Action) -> Result<()> {
         Action::SearchWord { forward, whole } => search_word(app, forward, whole),
         Action::RunCommand(line) => commands::run(app, &line),
         Action::ScrollCaret(row) => motion::scroll_caret(app, row),
+        Action::Fold(command) => motion::fold(app, command),
         Action::Reselect => reselect(app),
         Action::JumpBack => motion::jump(app, true),
         Action::JumpForward => motion::jump(app, false),
@@ -239,6 +245,8 @@ fn execute(app: &mut App, action: Action) -> Result<()> {
             edit.checkpoint();
         }
         Action::ToggleComment => operator::toggle_comment(app),
+        Action::ReplaceAnswer(answer) => crate::app::substitute::answer(app, answer),
+
         Action::Extend(motion) => move_cursors(app, motion, true),
         Action::Select(motion) => move_cursors(app, motion, true),
         Action::SelectAll => select_all(app),
@@ -342,11 +350,13 @@ fn execute(app: &mut App, action: Action) -> Result<()> {
             if let Some(picker) = app.picker.as_mut() {
                 picker.push(ch);
             }
+            app.refresh_live_picker();
         }
         Action::PickerBackspace => {
             if let Some(picker) = app.picker.as_mut() {
                 picker.pop();
             }
+            app.refresh_live_picker();
         }
         Action::PickerMove(delta) => {
             if let Some(picker) = app.picker.as_mut() {
@@ -418,6 +428,7 @@ fn execute(app: &mut App, action: Action) -> Result<()> {
             enter_mode(app, Mode::Search);
         }
         Action::SearchInput(ch) => {
+            app.history_cursor = None;
             app.search.push(ch);
             seek_from_origin(app);
         }
@@ -429,6 +440,11 @@ fn execute(app: &mut App, action: Action) -> Result<()> {
             seek_from_origin(app);
         }
         Action::SearchSubmit => {
+            app.history_cursor = None;
+            let query = app.search.query.clone();
+            crate::app::complete::History::push(&mut app.history.searches, &query);
+            app.registers
+                .set_named('/', Register::new(query, RegisterKind::Charwise));
             if app.search.is_active() {
                 let count = app.search.count(&app.buffer().document, MATCH_COUNT_CAP);
                 app.info(format!(
@@ -441,20 +457,60 @@ fn execute(app: &mut App, action: Action) -> Result<()> {
         Action::SearchCancel => return cancel_search(app),
         Action::SearchRepeat { forward } => repeat_search(app, forward),
 
-        Action::CommandInput(ch) => app.command_line.push(ch),
+        Action::CommandInput(ch) => {
+            app.completion = None;
+            app.history_cursor = None;
+            app.command_line.push(ch);
+        }
+        Action::CommandComplete { forward } => crate::app::complete::step(app, forward),
+        Action::CommandHistory { back } => {
+            app.completion = None;
+            let current = app.command_line.clone();
+            if let Some(line) = crate::app::complete::travel(
+                &app.history.commands,
+                &mut app.history_cursor,
+                &mut app.history_draft,
+                &current,
+                back,
+            ) {
+                app.command_line = line;
+            }
+        }
+        Action::SearchHistory { back } => {
+            let current = app.search.query.clone();
+            if let Some(query) = crate::app::complete::travel(
+                &app.history.searches,
+                &mut app.history_cursor,
+                &mut app.history_draft,
+                &current,
+                back,
+            ) {
+                app.search.set_query(query);
+                seek_from_origin(app);
+            }
+        }
         Action::CommandBackspace => {
+            app.completion = None;
+            app.history_cursor = None;
             app.command_line.pop();
             if app.command_line.is_empty() {
                 enter_mode(app, Mode::Normal);
             }
         }
         Action::CommandCancel => {
+            app.completion = None;
+            app.history_cursor = None;
             app.command_line.clear();
             app.tree_source = None;
             enter_mode(app, Mode::Normal);
         }
         Action::CommandSubmit => {
             let line = std::mem::take(&mut app.command_line);
+            app.completion = None;
+            app.history_cursor = None;
+            crate::app::complete::History::push(&mut app.history.commands, &line);
+            app.registers
+                .set_named(':', Register::new(line.clone(), RegisterKind::Charwise));
             enter_mode(app, Mode::Normal);
             commands::run(app, &line);
             app.tree_source = None;
@@ -771,7 +827,12 @@ fn enter_mode(app: &mut App, mode: Mode) {
         }
         Mode::Command => app.command_line.clear(),
         Mode::Insert => app.window_mut().collapse_selections(),
-        Mode::Search | Mode::Tree | Mode::Picker | Mode::Confirm | Mode::Terminal => {}
+        Mode::Search
+        | Mode::Tree
+        | Mode::Picker
+        | Mode::Confirm
+        | Mode::Terminal
+        | Mode::Replace => {}
     }
     app.mode = mode;
 }
@@ -917,6 +978,17 @@ fn submit_picker(app: &mut App) {
         }
         Some(PickerTarget::Command(command)) => commands::run(app, &command),
         Some(PickerTarget::Theme(theme)) => commands::run(app, &format!("theme {theme}")),
+        Some(PickerTarget::Location(path, position)) => {
+            app.window_mut().record_jump();
+            match app.open(path) {
+                Ok(()) => {
+                    let position = app.buffer().document.clamp(position, false);
+                    app.window_mut().clear_secondary_cursors();
+                    app.window_mut().cursor_mut().move_to(position, false);
+                }
+                Err(error) => app.error(error.to_string()),
+            }
+        }
         _ => {}
     }
 }
@@ -924,8 +996,10 @@ fn submit_picker(app: &mut App) {
 pub(super) fn move_cursors(app: &mut App, motion: Motion, extend: bool) {
     let extend = extend || app.mode.is_visual();
     let allow_eol = app.mode.is_insert() || (extend && !app.mode.is_visual());
+    let from = app.window().cursor().head.line;
     app.edit().checkpoint();
     app.move_cursors(motion, extend, allow_eol);
+    motion::skip_folds(app, from);
 }
 
 fn select_all(app: &mut App) {

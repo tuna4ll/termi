@@ -6,7 +6,7 @@ use super::mode::Mode;
 use super::state::App;
 use crate::config;
 use crate::editor::command::{Command, parser};
-use crate::editor::cursor::Motion;
+use crate::editor::cursor::{Motion, Position};
 use crate::picker::PickerKind;
 use crate::theme::Theme;
 
@@ -17,6 +17,7 @@ MODES     i a I A o O insert    v visual    V line    Alt+v block
 MOVE      h j k l     w b e  W B E words    0 ^ $ line    gg G file
           f t F T x  find on the line       ; , repeat the find
           % bracket   { } paragraph         H M L screen  zt zz zb scroll
+FOLDS     za toggle   zc close   zo open   zR open all   zM close all
           Ctrl+left/right by word           Ctrl+Home/End file
           a count first repeats it: 3j  5w  10G
 MARKS     ma set     'a line    `a place   (A-Z work across files)
@@ -55,7 +56,20 @@ COMMANDS  :w [path]  :q[!]  :wq  :wa  :qa[!]  :wqa  :e[!] path
           :set ff=unix|dos   :set fenc=utf-8|utf-8-bom|latin1   :set ro
           :set! saves a setting to the config file   :config [reload]
           :set transparent   leaves the background to the terminal
+          :set list  indentguides  minimap  matchbrackets
+          :[range]s/a/b/[gciI]   ranges: 5,9  .,+3  %  '<,'>  'a,$
+          :grep [text]  (Ctrl+G)   :greplace/a/b/   :help [topic]
           :%s/pattern/replacement/g";
+
+/// The section headings of the help text, for `:help <Tab>`.
+#[must_use]
+pub fn help_topics() -> Vec<String> {
+    HELP.lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|word| word.chars().all(|ch| ch.is_ascii_uppercase()) && word.len() > 2)
+        .map(str::to_lowercase)
+        .collect()
+}
 
 /// The key reference, with the actions a `[keys]` table can name.
 fn help_text() -> String {
@@ -140,7 +154,23 @@ fn execute(app: &mut App, command: Command) {
         Command::Copy(path) => copy_tree_path(app, path),
         Command::Move(path) => move_tree_path(app, path, "moved"),
         Command::Reload => reload(app),
-        Command::GotoLine(line) => app.move_cursors(Motion::ToLine(line), false, false),
+        Command::GotoLine(line) => {
+            app.window_mut().record_jump();
+            app.move_cursors(Motion::ToLine(line), false, false);
+        }
+        Command::GotoAddress(address) => {
+            let range = crate::editor::command::LineRange {
+                start: address,
+                end: address,
+            };
+            match super::substitute::resolve_range(app, Some(range)) {
+                Ok((line, _)) => {
+                    app.window_mut().record_jump();
+                    app.move_cursors(Motion::ToLine(line), false, false);
+                }
+                Err(error) => app.error(error),
+            }
+        }
         Command::Set {
             key,
             value,
@@ -159,8 +189,23 @@ fn execute(app: &mut App, command: Command) {
             pattern,
             replacement,
             all,
-            whole_file,
-        } => substitute(app, &pattern, &replacement, all, whole_file),
+            confirm,
+            case_sensitive,
+            range,
+        } => super::substitute::substitute(
+            app,
+            &pattern,
+            &replacement,
+            (all, confirm, case_sensitive),
+            range,
+        ),
+        Command::ProjectReplace {
+            pattern,
+            replacement,
+            case_sensitive,
+        } => super::substitute::project_replace(app, &pattern, &replacement, case_sensitive),
+        Command::Grep(pattern) => app.open_grep(pattern.as_deref()),
+        Command::HelpTopic(topic) => open_help(app, Some(&topic)),
         Command::Earlier(count) => {
             if !app.edit().earlier(count) {
                 app.info("already at the oldest state");
@@ -171,7 +216,7 @@ fn execute(app: &mut App, command: Command) {
                 app.info("already at the newest state");
             }
         }
-        Command::Help => app.show_popup("termi", help_text()),
+        Command::Help => open_help(app, None),
         Command::Find => app.open_picker(PickerKind::Files),
         Command::Buffers => app.open_picker(PickerKind::Buffers),
         Command::Commands => app.open_picker(PickerKind::Commands),
@@ -489,6 +534,10 @@ fn config_key(key: &str) -> Option<(&'static str, Convert)> {
         "trim" | "trim_trailing_whitespace" => ("trim_trailing_whitespace", flag),
         "finalnewline" | "fixeol" | "insert_final_newline" => ("insert_final_newline", flag),
         "transparent" | "transparent_background" => ("transparent_background", flag),
+        "list" | "show_whitespace" => ("show_whitespace", flag),
+        "indentguides" | "ig" | "indent_guides" => ("indent_guides", flag),
+        "matchbrackets" | "mb" | "match_brackets" => ("match_brackets", flag),
+        "minimap" => ("minimap", flag),
         "theme" => ("theme", text),
         _ => return None,
     })
@@ -604,6 +653,10 @@ fn set_option(app: &mut App, key: &str, value: &str) {
         "ignorecase" | "ic" => app.search.case_sensitive = Some(!boolean()),
         "regex" => app.search.regex = boolean(),
         "theme" => return set_theme(app, value),
+        "list" | "show_whitespace" => app.config.show_whitespace = boolean(),
+        "indentguides" | "ig" | "indent_guides" => app.config.indent_guides = boolean(),
+        "matchbrackets" | "mb" | "match_brackets" => app.config.match_brackets = boolean(),
+        "minimap" => app.config.minimap = boolean(),
         "transparent" | "transparent_background" => {
             app.config.transparent_background = boolean();
             let name = app.config.theme.clone();
@@ -614,40 +667,44 @@ fn set_option(app: &mut App, key: &str, value: &str) {
     app.info(format!("{key} = {value}"));
 }
 
-fn substitute(app: &mut App, pattern: &str, replacement: &str, all: bool, whole_file: bool) {
-    let previous = std::mem::take(&mut app.search.query);
-    app.search.set_query(pattern.to_string());
+/// The label the help buffer goes by.
+const HELP_NAME: &str = "[help]";
 
-    if let Some(error) = app.search.error() {
-        let error = error.to_string();
-        app.search.set_query(previous);
-        return app.error(error);
-    }
-
-    let lines = if whole_file {
-        0..app.buffer().document.len_lines()
-    } else {
-        let line = app.window().cursor().head.line;
-        line..line + 1
+/// `:help [topic]` — show the reference in a read-only buffer, so it can be
+/// searched, scrolled and split like any other text; with a topic, start at
+/// its first mention.
+fn open_help(app: &mut App, topic: Option<&str>) {
+    let index = app
+        .buffers
+        .iter()
+        .position(|buffer| buffer.document.display_name() == HELP_NAME)
+        .unwrap_or_else(|| {
+            let mut document = crate::editor::document::Document::scratch(&help_text(), HELP_NAME);
+            document.set_readonly(true);
+            app.buffers
+                .push(crate::editor::buffer::Buffer::new(document));
+            app.buffers.len() - 1
+        });
+    app.window_mut().show(index);
+    let Some(topic) = topic else {
+        return;
     };
-
-    let index = app.window().buffer;
-    let App {
-        buffers, search, ..
-    } = app;
-    let replaced = search.replace_in(&mut buffers[index].document, lines, replacement, all);
-
-    app.buffer_mut().invalidate_syntax_from(0);
-    app.clamp_cursors(false);
-    app.edit().checkpoint();
-
-    if replaced == 0 {
-        app.error(format!("no match for {pattern}"));
-    } else {
-        app.info(format!("replaced {replaced} occurrence(s)"));
+    let document = &app.buffer().document;
+    let needle = topic.to_lowercase();
+    let found = (0..document.len_lines())
+        .find(|line| document.line_string(*line).to_lowercase().contains(&needle));
+    match found {
+        Some(line) => {
+            app.window_mut().record_jump();
+            app.window_mut()
+                .cursor_mut()
+                .move_to(Position::new(line, 0), false);
+            app.window_mut().view.top_line = line;
+        }
+        None => app.error(format!("no help for {topic}")),
     }
-    app.mode = Mode::Normal;
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -10,10 +10,12 @@
 //! **Public API:** [`App`], [`run`].
 
 pub mod commands;
+pub mod complete;
 pub mod dispatch;
 pub mod mode;
 pub mod session;
 pub mod state;
+pub mod substitute;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -89,6 +91,7 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
             _ => {}
         }
     }
+    app.history.save();
     if app.config.restore_session && !app.startup.no_session && !app.startup.clean {
         // A session that cannot be written is not worth an error on the way
         // out; the files themselves are safe.

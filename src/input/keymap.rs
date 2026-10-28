@@ -42,6 +42,7 @@ fn universal(key: KeyEvent) -> Option<Action> {
         KeyCode::Char('e') => Action::Scroll(1),
         KeyCode::Char('b') => Action::ToggleTree,
         KeyCode::Char('o') => Action::OpenPicker(PickerKind::Files),
+        KeyCode::Char('g') => Action::OpenPicker(PickerKind::Grep),
         // Ctrl+/ arrives as `/` from terminals speaking the kitty protocol and
         // as the legacy 0x1F, which crossterm reports as Ctrl+7, elsewhere.
         KeyCode::Char('/' | '7' | '_') => Action::ToggleComment,
@@ -298,10 +299,21 @@ pub fn visual(key: KeyEvent, pending: &mut Option<Pending>) -> Option<Action> {
 }
 
 pub fn command(key: KeyEvent) -> Action {
+    if is_ctrl(key.modifiers) {
+        return match key.code {
+            KeyCode::Char('p') => Action::CommandHistory { back: true },
+            KeyCode::Char('n') => Action::CommandHistory { back: false },
+            _ => Action::None,
+        };
+    }
     match key.code {
         KeyCode::Esc => Action::CommandCancel,
         KeyCode::Enter => Action::CommandSubmit,
         KeyCode::Backspace => Action::CommandBackspace,
+        KeyCode::Tab => Action::CommandComplete { forward: true },
+        KeyCode::BackTab => Action::CommandComplete { forward: false },
+        KeyCode::Up => Action::CommandHistory { back: true },
+        KeyCode::Down => Action::CommandHistory { back: false },
         KeyCode::Char(ch) if is_plain(key.modifiers) => Action::CommandInput(ch),
         _ => Action::None,
     }
@@ -343,8 +355,8 @@ pub fn search(key: KeyEvent) -> Action {
         KeyCode::Esc => Action::SearchCancel,
         KeyCode::Enter => Action::SearchSubmit,
         KeyCode::Backspace => Action::SearchBackspace,
-        KeyCode::Down => Action::SearchRepeat { forward: true },
-        KeyCode::Up => Action::SearchRepeat { forward: false },
+        KeyCode::Up => Action::SearchHistory { back: true },
+        KeyCode::Down => Action::SearchHistory { back: false },
         KeyCode::Char(ch) if is_plain(key.modifiers) => Action::SearchInput(ch),
         _ => Action::None,
     }
@@ -367,6 +379,15 @@ pub fn picker(key: KeyEvent) -> Action {
         KeyCode::PageDown => Action::PickerMove(10),
         KeyCode::PageUp => Action::PickerMove(-10),
         KeyCode::Char(ch) if is_plain(key.modifiers) => Action::PickerInput(ch),
+        _ => Action::None,
+    }
+}
+
+/// `:s///c` asks about one match at a time: yes, no, all, last or quit.
+pub fn replace(key: KeyEvent) -> Action {
+    match key.code {
+        KeyCode::Char(answer @ ('y' | 'n' | 'a' | 'q' | 'l')) => Action::ReplaceAnswer(answer),
+        KeyCode::Esc => Action::ReplaceAnswer('q'),
         _ => Action::None,
     }
 }

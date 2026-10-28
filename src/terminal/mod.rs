@@ -44,6 +44,8 @@ pub struct Terminal {
     child: Box<dyn Child + Send + Sync>,
     size: PtySize,
     name: String,
+    /// The exit code, once the process has finished.
+    exit: Option<u32>,
 }
 
 impl fmt::Debug for Terminal {
@@ -104,7 +106,28 @@ impl Terminal {
             child,
             size,
             name: command.unwrap_or("shell").to_string(),
+            exit: None,
         })
+    }
+
+    /// The process's exit code, once it has finished.
+    ///
+    /// Asked of the child each frame after its output closes, so a command
+    /// run in a pane — a build, a test run — reports how it went.
+    pub fn exit_code(&mut self) -> Option<u32> {
+        if self.exit.is_none()
+            && !self.is_running()
+            && let Ok(Some(status)) = self.child.try_wait()
+        {
+            self.exit = Some(status.exit_code());
+        }
+        self.exit
+    }
+
+    /// The exit code found by the last [`Terminal::exit_code`].
+    #[must_use]
+    pub const fn exited_with(&self) -> Option<u32> {
+        self.exit
     }
 
     /// Human-readable process name for the terminal status bar.

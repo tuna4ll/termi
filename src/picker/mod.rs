@@ -17,6 +17,8 @@ pub enum PickerKind {
     Buffers,
     Commands,
     Themes,
+    /// Every line in the project matching the query, searched as it is typed.
+    Grep,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +27,8 @@ pub enum PickerTarget {
     Buffer(usize),
     Command(String),
     Theme(String),
+    /// A place in a file: a search hit, a definition, a reference.
+    Location(PathBuf, crate::editor::cursor::Position),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -58,6 +62,9 @@ pub struct Picker {
     items: Vec<PickerItem>,
     matches: Vec<usize>,
     pub selected: usize,
+    /// Whether the items are found anew for each query rather than filtered,
+    /// as a project search is.
+    pub live: bool,
 }
 
 impl Picker {
@@ -69,9 +76,24 @@ impl Picker {
             items,
             matches: Vec::new(),
             selected: 0,
+            live: false,
         };
         picker.update_matches();
         picker
+    }
+
+    /// A picker whose items its owner replaces as the query changes.
+    #[must_use]
+    pub fn live(title: impl Into<String>) -> Self {
+        let mut picker = Self::new(title, Vec::new());
+        picker.live = true;
+        picker
+    }
+
+    /// Replace every item, as a live picker does after each keystroke.
+    pub fn set_items(&mut self, items: Vec<PickerItem>) {
+        self.items = items;
+        self.update_matches();
     }
 
     pub fn matches(&self) -> impl Iterator<Item = &PickerItem> {
@@ -105,6 +127,11 @@ impl Picker {
     }
 
     fn update_matches(&mut self) {
+        if self.live {
+            self.matches = (0..self.items.len()).collect();
+            self.selected = self.selected.min(self.matches.len().saturating_sub(1));
+            return;
+        }
         let query = self.query.to_lowercase();
         let mut ranked: Vec<(usize, usize, usize)> = self
             .items

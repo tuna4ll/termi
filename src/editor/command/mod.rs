@@ -11,6 +11,37 @@
 
 pub mod parser;
 
+/// One end of a line range: a base line and an offset from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Address {
+    /// Where the address starts from.
+    pub base: Base,
+    /// Lines to add (or, negative, subtract) — `.+3`, `$-1`.
+    pub offset: isize,
+}
+
+/// What an address is counted from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Base {
+    /// A line number, one-based as typed.
+    Line(usize),
+    /// `.` — the caret's line.
+    Current,
+    /// `$` — the last line.
+    Last,
+    /// `'a`, `'<`, `'>` — a mark's line.
+    Mark(char),
+}
+
+/// `:12,20`, `:%`, `:'<,'>` — the lines a command works on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LineRange {
+    /// The first line.
+    pub start: Address,
+    /// The last line; the same as `start` for a single address.
+    pub end: Address,
+}
+
 use std::path::PathBuf;
 
 use crate::editor::window::Axis;
@@ -69,6 +100,8 @@ pub enum Command {
     Reload,
     /// `:42` — jump to a line.
     GotoLine(usize),
+    /// `:$`, `:'a`, `:.+5` — jump to a line given any other way.
+    GotoAddress(Address),
     /// `:set key value` — change a setting; `:set!` also saves it to the
     /// config file.
     Set {
@@ -85,22 +118,40 @@ pub enum Command {
     Theme(String),
     /// `:bn` / `:bp` — switch buffers.
     CycleBuffer { forward: bool },
-    /// `:%s/pattern/replacement/[g]` — substitute.
+    /// `:[range]s/pattern/replacement/[flags]` — substitute.
     Substitute {
         /// Search pattern, interpreted according to the search settings.
         pattern: String,
+        /// Replacement text; `$1` and `${name}` name capture groups.
+        replacement: String,
+        /// Replace every match on a line rather than the first — `g`.
+        all: bool,
+        /// Ask before each replacement — `c`.
+        confirm: bool,
+        /// `i` or `I`: case-insensitive or -sensitive whatever the setting.
+        case_sensitive: Option<bool>,
+        /// The lines to work on; the caret's line when none was given.
+        range: Option<LineRange>,
+    },
+    /// `:grep [pattern]` — search the project, live when no pattern is given.
+    Grep(Option<String>),
+    /// `:greplace/pattern/replacement/[flags]` — substitute in every project
+    /// file, leaving the changed files open and unsaved.
+    ProjectReplace {
+        /// Search pattern.
+        pattern: String,
         /// Replacement text.
         replacement: String,
-        /// Replace every match on a line rather than the first.
-        all: bool,
-        /// Apply to the whole document rather than the current line.
-        whole_file: bool,
+        /// `i` or `I`.
+        case_sensitive: Option<bool>,
     },
+    /// `:help [topic]` — open the reference, at the topic if one was given.
+    HelpTopic(String),
     /// `:earlier [n]` — step back through every state the buffer has had.
     Earlier(usize),
     /// `:later [n]` — step forward again.
     Later(usize),
-    /// `:help` — list the commands.
+    /// `:help` — open the key and command reference.
     Help,
     /// `:find` — search project files.
     Find,

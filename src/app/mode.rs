@@ -36,6 +36,8 @@ pub enum Mode {
     Picker,
     /// A destructive action is waiting for an explicit key.
     Confirm,
+    /// `:s///c` is asking about one match at a time.
+    Replace,
     /// A child process running in an embedded terminal has the keyboard.
     Terminal,
 }
@@ -55,6 +57,7 @@ impl Mode {
             Self::Tree => "TREE",
             Self::Picker => "PICKER",
             Self::Confirm => "CONFIRM",
+            Self::Replace => "REPLACE?",
             Self::Terminal => "TERMINAL",
         }
     }

@@ -19,6 +19,7 @@ use ratatui::widgets::Widget;
 use crate::config::Config;
 use crate::editor::buffer::Buffer;
 use crate::editor::cursor::Position;
+use crate::editor::fold;
 use crate::editor::selection::Range;
 use crate::editor::window::{Area, Window};
 use crate::search::{LineMatch, Search};
@@ -50,6 +51,12 @@ pub fn scroll_into_view(buffer: &Buffer, window: &mut Window, config: &Config, a
     let width = usize::from(area.width.saturating_sub(gutter));
     let height = usize::from(area.height);
     let head = window.cursor().head;
+
+    let folds = fold::closed_ranges(&buffer.document, &window.folds, config.tab_width);
+    if !folds.is_empty() {
+        scroll_folded(buffer, window, config, &folds, (width, height));
+        return;
+    }
 
     if !config.word_wrap {
         let line = DisplayLine::new(&buffer.document.line_string(head.line), config.tab_width);
@@ -87,6 +94,54 @@ pub fn scroll_into_view(buffer: &Buffer, window: &mut Window, config: &Config, a
     }
 }
 
+/// [`scroll_into_view`] with closed folds, where a screen row is a visible
+/// line rather than a document line. Wrapping is set aside while folds are
+/// closed: each visible line takes one row.
+fn scroll_folded(
+    buffer: &Buffer,
+    window: &mut Window,
+    config: &Config,
+    folds: &[(usize, usize)],
+    (width, height): (usize, usize),
+) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let head = window.cursor().head;
+    let caret = fold::hidden_by(folds, head.line).map_or(head.line, |(start, _)| start);
+    let margin = config.scrolloff.min(height.saturating_sub(1) / 2);
+    let previous = |line: usize| {
+        let above = line.saturating_sub(1);
+        fold::hidden_by(folds, above).map_or(above, |(start, _)| start)
+    };
+
+    let mut top = window.view.top_line;
+    if let Some((start, _)) = fold::hidden_by(folds, top) {
+        top = start;
+    }
+    if caret < top {
+        top = caret;
+    }
+    // Keep the margin above the caret…
+    while top > 0 && fold::visible_between(folds, top, caret) < margin {
+        top = previous(top);
+    }
+    // …and below it.
+    let last = buffer.document.last_line();
+    while top < caret && fold::visible_between(folds, top, caret) + margin + 1 > height {
+        top = fold::visible_after(folds, top).min(last);
+    }
+    window.view.top_line = top;
+
+    let line = DisplayLine::new(&buffer.document.line_string(head.line), config.tab_width);
+    let col = line.column_of(head.col);
+    if col < window.view.left_col {
+        window.view.left_col = col;
+    } else if col >= window.view.left_col + width {
+        window.view.left_col = col - width + 1;
+    }
+}
+
 /// The document position under a screen cell, or `None` when the cell is not
 /// inside `area`.
 ///
@@ -115,7 +170,14 @@ pub fn position_at(
     let column = usize::from(x.saturating_sub(area.x + gutter));
     let row = usize::from(y - area.y);
 
-    let (line, cell) = if config.word_wrap {
+    let folds = fold::closed_ranges(&buffer.document, &window.folds, config.tab_width);
+    let (line, cell) = if !folds.is_empty() {
+        let mut line = window.view.top_line;
+        for _ in 0..row {
+            line = fold::visible_after(&folds, line);
+        }
+        (line, window.view.left_col + column)
+    } else if config.word_wrap {
         wrapped_cell(buffer, window, config, width, row, column)?
     } else {
         (window.view.top_line + row, window.view.left_col + column)
@@ -162,6 +224,66 @@ fn wrapped_cell(
     Some((buffer.document.last_line(), usize::MAX))
 }
 
+/// Which characters of a line are drawn as marks rather than themselves:
+/// tabs, trailing blanks and non-breaking spaces with `show_whitespace`, the
+/// indentation levels with `indent_guides`.
+struct Marks {
+    chars: Vec<char>,
+    /// Where the trailing blanks start.
+    trailing: usize,
+    /// Where the indentation ends, in characters.
+    indent: usize,
+    whitespace: bool,
+    guides: bool,
+    tab_width: usize,
+}
+
+impl Marks {
+    fn of(text: &str, config: &Config) -> Self {
+        let chars: Vec<char> = text.chars().collect();
+        let trailing = chars
+            .iter()
+            .rposition(|ch| !ch.is_whitespace())
+            .map_or(0, |last| last + 1);
+        let indent = chars
+            .iter()
+            .take_while(|ch| matches!(ch, ' ' | '\t'))
+            .count();
+        Self {
+            chars,
+            trailing,
+            indent,
+            whitespace: config.show_whitespace,
+            guides: config.indent_guides,
+            tab_width: config.tab_width.max(1),
+        }
+    }
+
+    /// The mark to draw for the cell at display `column`, which belongs to
+    /// character `index`; `first` is whether it is that character's first
+    /// cell.
+    fn glyph(&self, index: usize, column: usize, first: bool) -> Option<char> {
+        let ch = *self.chars.get(index)?;
+        if self.whitespace {
+            match ch {
+                '\t' if first => return Some('→'),
+                '\u{a0}' => return Some('⍽'),
+                ' ' if index >= self.trailing => return Some('·'),
+                _ => {}
+            }
+        }
+        if self.guides
+            && index < self.indent
+            && column > 0
+            && column.is_multiple_of(self.tab_width)
+            && (ch == ' ' || ch == '\t')
+        {
+            return Some('│');
+        }
+        None
+    }
+}
+
 /// One screen row's slice of a document line.
 ///
 /// Grouped into a struct because the row, the line and the cell range always
@@ -196,6 +318,10 @@ pub struct EditorView<'a> {
     pub search: Option<&'a Search>,
     /// The match the caret is sitting on, painted more strongly than the rest.
     pub active_match: Option<Range>,
+    /// The bracket under the caret and its partner, as character indices.
+    pub brackets: Option<(usize, usize)>,
+    /// Closed folds, as the line spans they hide.
+    pub folds: &'a [(usize, usize)],
 }
 
 impl EditorView<'_> {
@@ -215,7 +341,15 @@ impl EditorView<'_> {
         );
         let target = display.column_of(head.col);
 
-        let (row, column) = if self.config.word_wrap {
+        let (row, column) = if !self.folds.is_empty() {
+            if head.line < view.top_line {
+                return None;
+            }
+            (
+                fold::visible_between(self.folds, view.top_line, head.line),
+                target.checked_sub(view.left_col)?,
+            )
+        } else if self.config.word_wrap {
             // Every line above the caret may occupy several rows, so the row has
             // to be counted rather than subtracted.
             let mut row = 0usize;
@@ -309,6 +443,7 @@ impl EditorView<'_> {
         let display = DisplayLine::new(&text, self.config.tab_width);
         let line_start = self.buffer.document.line_start(line);
         let left = first_cell;
+        let marks = Marks::of(&text, self.config);
 
         // Matching only the visible lines is what keeps search highlighting free
         // on a large file: the cost is bounded by the window, not the document.
@@ -338,9 +473,23 @@ impl EditorView<'_> {
                         &matches,
                         &syntax,
                     );
+                    let first_of_char = index == 0
+                        || display
+                            .cells
+                            .get(index - 1)
+                            .map(|previous| previous.char_index)
+                            != Some(display_cell.char_index);
                     match display_cell.glyph {
                         Some(glyph) => {
-                            cell.set_char(glyph).set_style(style);
+                            match marks.glyph(display_cell.char_index, index, first_of_char) {
+                                Some(mark) => {
+                                    cell.set_char(mark)
+                                        .set_style(style.patch(self.theme.whitespace));
+                                }
+                                None => {
+                                    cell.set_char(glyph).set_style(style);
+                                }
+                            }
                         }
                         // Trailing half of a wide glyph: the glyph itself already
                         // covers this column, unless it was scrolled off the left
@@ -381,6 +530,12 @@ impl EditorView<'_> {
         if self.active_match.is_some_and(|range| range.contains(index)) {
             return base.patch(self.theme.search_active);
         }
+        if self
+            .brackets
+            .is_some_and(|(open, close)| index == open || index == close)
+        {
+            return base.patch(self.theme.bracket_match);
+        }
         if matches
             .iter()
             .any(|found| column >= found.start && column < found.end)
@@ -419,11 +574,10 @@ impl EditorView<'_> {
 
     /// One document line per screen row, scrolled horizontally.
     fn render_unwrapped(&self, surface: &mut Surface, area: Rect, caret: usize) {
-        let top = self.window.view.top_line;
         let left = self.window.view.left_col;
+        let mut line = self.window.view.top_line;
 
         for row in 0..area.height {
-            let line = top + usize::from(row);
             if line >= self.buffer.document.len_lines() {
                 self.render_filler(surface, area, row);
                 return;
@@ -440,6 +594,41 @@ impl EditorView<'_> {
                 },
                 caret,
             );
+            if let Some((_, end)) = fold::starting_at(self.folds, line) {
+                self.render_fold_marker(surface, area, y, line, end);
+            }
+            line = fold::visible_after(self.folds, line);
+        }
+    }
+
+    /// Say how much a closed fold hides, after the text of its first line.
+    fn render_fold_marker(
+        &self,
+        surface: &mut Surface,
+        area: Rect,
+        y: u16,
+        line: usize,
+        end: usize,
+    ) {
+        let gutter = gutter_width(self.config, self.buffer.document.len_lines());
+        let text = self.buffer.document.line_string(line);
+        let width = DisplayLine::new(&text, self.config.tab_width).width();
+        let start = width.saturating_sub(self.window.view.left_col);
+        let hidden = end - line;
+        let label = format!(" ⋯ {hidden} line{} ", if hidden == 1 { "" } else { "s" });
+        let x0 = area.x + gutter;
+        let text_width = usize::from(area.width.saturating_sub(gutter));
+        for column in 0..text_width {
+            let Some(cell) = surface.cell_mut((x0 + u16::try_from(column).unwrap_or(u16::MAX), y))
+            else {
+                continue;
+            };
+            if column > start {
+                let symbol = label.chars().nth(column - start - 1).unwrap_or(' ');
+                cell.set_char(symbol);
+            }
+            let style = cell.style().patch(self.theme.fold);
+            cell.set_style(style);
         }
     }
 
@@ -505,7 +694,9 @@ impl Widget for EditorView<'_> {
         surface.set_style(area, self.theme.text);
         let caret = self.window.cursor().head.line;
 
-        if self.config.word_wrap {
+        // Closed folds put one line on each row, wrapped or not: a fold's
+        // line stands for many and is not worth splitting.
+        if self.config.word_wrap && self.folds.is_empty() {
             self.render_wrapped(surface, area, caret);
         } else {
             self.render_unwrapped(surface, area, caret);

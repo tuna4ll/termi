@@ -82,6 +82,8 @@ pub struct Document {
     /// Bumped by every change, so anything derived from the text — swap
     /// files, git signs, a language server — can tell when to recompute.
     revision: u64,
+    /// The name of a document that is not a file, such as `[help]`.
+    label: Option<String>,
 }
 
 impl Default for Document {
@@ -102,6 +104,16 @@ impl Document {
             dirty: false,
             readonly: false,
             revision: 0,
+            label: None,
+        }
+    }
+
+    /// A document that is not a file, shown under `label`.
+    #[must_use]
+    pub fn scratch(text: &str, label: &str) -> Self {
+        Self {
+            label: Some(label.to_string()),
+            ..Self::from_text(text, None)
         }
     }
 
@@ -122,6 +134,7 @@ impl Document {
             dirty: false,
             readonly: false,
             revision: 0,
+            label: None,
         }
     }
 
@@ -192,6 +205,7 @@ impl Document {
             .as_deref()
             .and_then(Path::file_name)
             .and_then(std::ffi::OsStr::to_str)
+            .or(self.label.as_deref())
             .unwrap_or("[No Name]")
     }
 

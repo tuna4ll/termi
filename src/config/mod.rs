@@ -180,6 +180,14 @@ pub struct Config {
     /// Draw no background of its own, so the terminal's — a colour, an image,
     /// transparency — shows through.
     pub transparent_background: bool,
+    /// Show tabs, trailing spaces and non-breaking spaces as visible marks.
+    pub show_whitespace: bool,
+    /// Draw a faint rule at each level of indentation.
+    pub indent_guides: bool,
+    /// Highlight the bracket matching the one under the caret.
+    pub match_brackets: bool,
+    /// Show a miniature of the whole file beside each window.
+    pub minimap: bool,
     /// Reopen the files, windows and places of the last session in this
     /// directory when started without files.
     pub restore_session: bool,
@@ -216,6 +224,10 @@ impl Default for Config {
             undo_limit: 1000,
             persistent_undo: true,
             transparent_background: false,
+            show_whitespace: false,
+            indent_guides: false,
+            match_brackets: true,
+            minimap: false,
             restore_session: true,
             keys: KeyTables::default(),
             languages: HashMap::new(),

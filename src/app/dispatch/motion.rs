@@ -234,6 +234,97 @@ pub fn jump(app: &mut App, back: bool) {
     app.window_mut().cursor_mut().move_to(position, false);
 }
 
+/// `za`, `zc`, `zo`, `zR` and `zM`.
+pub fn fold(app: &mut App, command: crate::input::FoldCommand) {
+    use crate::editor::fold;
+    use crate::input::FoldCommand;
+
+    let tab_width = app.buffer_config(app.window().buffer).tab_width;
+    let line = app.window().cursor().head.line;
+    let document = &app.buffer().document;
+    let closed = fold::closed_ranges(document, &app.window().folds, tab_width);
+    let open_here = closed
+        .iter()
+        .find(|(start, end)| line >= *start && line <= *end)
+        .map(|(start, _)| *start);
+    let enclosing = fold::enclosing(document, line, tab_width);
+    let lines = document.len_lines();
+    let all = (command == FoldCommand::CloseAll).then(|| fold::all_starts(document, tab_width));
+
+    let window = app.window_mut();
+    window.fold_lines = lines;
+    let close = |window: &mut crate::editor::window::Window| match enclosing {
+        Some((start, _)) => {
+            window.folds.insert(start);
+            let column = window.cursor().head.col;
+            window
+                .cursor_mut()
+                .move_to(Position::new(start, column), false);
+            true
+        }
+        None => false,
+    };
+    let done = match command {
+        FoldCommand::Open => open_here.is_some_and(|start| window.folds.remove(&start)),
+        FoldCommand::Close => close(window),
+        FoldCommand::Toggle => match open_here {
+            Some(start) => window.folds.remove(&start),
+            None => close(window),
+        },
+        FoldCommand::OpenAll => {
+            window.folds.clear();
+            true
+        }
+        FoldCommand::CloseAll => {
+            window.folds = all.unwrap_or_default();
+            true
+        }
+    };
+    if !done {
+        app.info("no fold here");
+    }
+    if command == FoldCommand::CloseAll {
+        let top = app.window().cursor().head.line;
+        let document = &app.buffer().document;
+        let closed = fold::closed_ranges(document, &app.window().folds, tab_width);
+        if let Some((start, _)) = fold::hidden_by(&closed, top) {
+            let column = app.window().cursor().head.col;
+            app.window_mut()
+                .cursor_mut()
+                .move_to(Position::new(start, column), false);
+        }
+    }
+    app.clamp_cursors(false);
+}
+
+/// Keep the carets out of closed folds after a vertical move: a caret that
+/// went up into one lands on its first line, one that went down skips past.
+pub fn skip_folds(app: &mut App, from_line: usize) {
+    use crate::editor::fold;
+    if app.window().folds.is_empty() {
+        return;
+    }
+    let tab_width = app.buffer_config(app.window().buffer).tab_width;
+    let document = &app.buffer().document;
+    let closed = fold::closed_ranges(document, &app.window().folds, tab_width);
+    let last = document.last_line();
+    let head = app.window().cursor().head;
+    let Some((start, end)) = fold::hidden_by(&closed, head.line) else {
+        return;
+    };
+    let line = if head.line < from_line || end >= last {
+        start
+    } else {
+        end + 1
+    };
+    let goal = app.window().cursor().goal_col();
+    let position = document.clamp(Position::new(line, goal), app.mode.is_insert());
+    let extend = app.mode.is_visual();
+    let cursor = app.window_mut().cursor_mut();
+    cursor.move_to(position, extend);
+    cursor.set_goal_col(goal);
+}
+
 /// `zt`, `zz` and `zb` — scroll so the caret's line sits at a row of the
 /// window, without moving the caret.
 pub fn scroll_caret(app: &mut App, row: ScreenRow) {
