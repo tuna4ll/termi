@@ -439,6 +439,20 @@ fn execute(app: &mut App, action: Action) -> Result<()> {
         Action::ToggleTree => toggle_tree(app),
         Action::TreeMove(delta) => move_tree_selection(app, delta),
         Action::TreeActivate => activate_tree_entry(app),
+        Action::TreeLeave => {
+            let selected = app.tree_selected;
+            if let Some(index) = app.tree.as_mut().and_then(|tree| tree.leave(selected)) {
+                app.tree_selected = index;
+            }
+        }
+        Action::TreeRootUp => match app.tree.as_mut().map(crate::filesystem::tree::Tree::go_up) {
+            Some(Some(index)) => {
+                app.tree_selected = index;
+                app.refresh_tree();
+            }
+            Some(None) => app.info("already at the top"),
+            None => {}
+        },
         Action::TreeCreate { directory } => begin_tree_creation(app, directory),
         Action::TreeToggleHidden => {
             if let Some(tree) = app.tree.as_mut() {

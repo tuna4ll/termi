@@ -382,6 +382,8 @@ pub enum Action {
     ToggleTree,
     TreeMove(isize),
     TreeActivate,
+    TreeLeave,
+    TreeRootUp,
     TreeCreate {
         directory: bool,
     },

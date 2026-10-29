@@ -347,6 +347,8 @@ pub fn tree(key: KeyEvent) -> Action {
     match key.code {
         KeyCode::Esc | KeyCode::Char('q') => Action::EnterMode(Mode::Normal),
         KeyCode::Enter | KeyCode::Char('l' | ' ') | KeyCode::Right => Action::TreeActivate,
+        KeyCode::Char('h') | KeyCode::Left => Action::TreeLeave,
+        KeyCode::Backspace | KeyCode::Char('-') => Action::TreeRootUp,
         KeyCode::Char('j') | KeyCode::Down => Action::TreeMove(1),
         KeyCode::Char('k') | KeyCode::Up => Action::TreeMove(-1),
         KeyCode::PageDown => Action::TreeMove(10),

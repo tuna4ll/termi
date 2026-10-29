@@ -129,6 +129,8 @@ Press `:help` inside the editor for the same list.
 | `/` `?` `n` `N` | search forwards, backwards, repeat |
 | `Alt+↑` `Alt+↓` `Esc` | add a cursor above/below, collapse to one |
 | `Ctrl+B` | file tree |
+| `l` `h` (in the tree) | open a folder or file / close a folder, or go to the one holding it |
+| `Backspace` `-` (in the tree) | show the directory above the tree's root |
 | `a` `A` (in the tree) | create a file / directory at the selection |
 | `r` `c` `m` (in the tree) | rename / copy / move the selection |
 | `d` `.` (in the tree) | delete with confirmation / toggle hidden files |

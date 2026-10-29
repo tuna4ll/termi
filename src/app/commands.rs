@@ -40,7 +40,8 @@ CLIPBOARD Ctrl+C copy    Ctrl+X cut    Ctrl+V paste
 SEARCH    / next      ? previous      n / N repeat     * # word under caret
 FILES     Ctrl+O find     Ctrl+B tree                  Ctrl+S save
           Ctrl+N / Ctrl+P buffers    gt gT too
-TREE      a file    A directory    r rename    c copy    m move
+TREE      l open    h close / up a level    Backspace show the parent directory
+          a file    A directory    r rename    c copy    m move
           d delete  . hidden files
 WINDOWS   Ctrl+W then     s / v split     c close     o only      t terminal
                           h j k l focus   w next      = even

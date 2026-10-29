@@ -165,6 +165,35 @@ impl Tree {
         None
     }
 
+    /// Step out of where the selection is: collapse it if it is an open
+    /// directory, otherwise move to the directory holding it. Returns the row
+    /// to select, or `None` when there is nowhere to go inside the root.
+    pub fn leave(&mut self, index: usize) -> Option<usize> {
+        let entry = self.entries.get(index)?;
+        if entry.is_dir && entry.is_open {
+            let path = entry.path.clone();
+            self.expanded.remove(&path);
+            self.refresh();
+            return self.index_of(&path);
+        }
+        let parent = entry.path.parent()?.to_path_buf();
+        if parent == self.root {
+            return None;
+        }
+        self.index_of(&parent)
+    }
+
+    /// Show the directory above the root, with the old root open inside it.
+    /// Returns the old root's row, or `None` at the top of the filesystem.
+    pub fn go_up(&mut self) -> Option<usize> {
+        let parent = self.root.parent()?.to_path_buf();
+        let old = std::mem::replace(&mut self.root, parent.clone());
+        self.expanded.insert(parent);
+        self.expanded.insert(old.clone());
+        self.refresh();
+        self.index_of(&old)
+    }
+
     /// Read one directory and append its children, recursing into the ones that
     /// are expanded.
     ///
@@ -210,6 +239,37 @@ impl Tree {
                 self.collect(&path, depth + 1);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod leave_tests {
+    use super::*;
+
+    #[test]
+    fn leaving_collapses_then_climbs_and_the_root_can_move_up() {
+        let root = std::env::temp_dir().join("termi-tree-leave");
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("project/src")).expect("create fixture");
+        std::fs::write(root.join("project/src/main.rs"), "").expect("write fixture");
+
+        let mut tree = Tree::new(root.join("project"));
+        let src = tree.index_of(&root.join("project/src")).expect("src row");
+        tree.activate(src);
+        let file = tree
+            .index_of(&root.join("project/src/main.rs"))
+            .expect("file row");
+
+        // From the file, `h` goes to its folder; again, the folder closes.
+        assert_eq!(tree.leave(file), Some(src));
+        assert_eq!(tree.leave(src), Some(src));
+        assert!(tree.index_of(&root.join("project/src/main.rs")).is_none());
+        // At the root's own children there is nowhere further in to go.
+        assert_eq!(tree.leave(src), None);
+
+        let old = tree.go_up().expect("a parent to go to");
+        assert_eq!(tree.root(), root.as_path());
+        assert_eq!(tree.path_at(old), Some(root.join("project").as_path()));
     }
 }
 
