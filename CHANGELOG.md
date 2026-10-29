@@ -7,6 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-29
+
+### Added
+
+- **vi's grammar** — counts, the `d` `c` `y` `>` `<` `gu` `gU` `g~` and `gc`
+  operators with any motion or text object, text objects for words, WORDs,
+  paragraphs, brackets, quotes and tags, `f` `t` `F` `T` with `;` and `,`, `%`,
+  `{` `}`, `W` `B` `E`, `H` `M` `L`, `zt` `zz` `zb`, `r`, `~`, `J`, `gJ`, `P`,
+  `x` `X` `s` `S` `C` `D` `Y`, `*` and `#`, and `.` to repeat the last change.
+- **Registers, macros, marks and jumps** — `"a`–`"z` (upper case appends), the
+  yank register `"0`, the delete history `"1`–`"9`, `"_`, `"+`, `"%`, `":` and
+  `"/`; macros recorded with `q` and played with `@`, `@@` and `@:`; marks
+  `a`–`z` per file and `A`–`Z` across files; a jump list on `Alt+←`/`Alt+→`.
+- **Visual block mode** on `Alt+v`, with `I` and `A` typing on every line and
+  block-wise yanks that put back as rectangles.
+- **An undo tree** — undoing and typing something new starts a branch rather
+  than losing the undone edits; `g-` `g+`, `:earlier` and `:later` walk every
+  state. Undoing back to the saved text makes the buffer clean, and each file's
+  history is kept on disk across restarts (`persistent_undo`, `undo_limit`).
+- **Languages as Lua scripts** — the highlighter has no languages compiled into
+  it. The built-in ones are scripts in `runtime/syntax/`, and a script in
+  `<config-dir>/termi/syntax/` adds a language or replaces one, either as rules
+  or with a `highlight` function of its own. Fourteen new languages: Go,
+  JavaScript, TypeScript, Java and Kotlin, Lua, shell, SQL, HTML and XML, CSS,
+  JSON, TOML, YAML, Makefiles and Dockerfiles. Extensionless scripts are
+  recognised by their `#!` line.
+- **Language servers** — diagnostics, completion, hover (`K`), definitions
+  (`gd`), references (`gr`), rename (`F2`, `:rename`) and formatting
+  (`:format`, or a configured `formatter`), from the usual server for each
+  language when it is installed, or the one `[languages.<name>]` names.
+- **Git** — change signs in a new sign column, `]c` `[c`, `:blame`, the branch
+  in the status bar and file status in the tree.
+- **Project search** — `Ctrl+G` and `:grep` search every file as you type;
+  `:greplace/a/b/` replaces across the project and leaves the files unsaved.
+- **Ranged and confirmed substitution** — `:5,9s`, `:'<,'>s` (`:` from a
+  selection fills it in), `:.,+3s`, `:'a,$s`, and the `c`, `i` and `I` flags.
+- **Recovery** — swap files for modified buffers, `:recover` and `:dropswap`.
+- **Files** — UTF-8 with a BOM and Latin-1 open and save byte for byte,
+  `:set fileformat` and `:set encoding` change how a file is written, binary
+  files are refused, read-only files need `:w!`, `:sudow` writes through sudo,
+  `.editorconfig` is honoured, indentation is detected, `insert_final_newline`,
+  and large files and very long lines skip highlighting.
+- **Configuration** — key mappings per mode in `[keys.normal]`, `[keys.insert]`
+  and `[keys.visual]`; settings per language in `[languages.<name>]`; `:set!`
+  saves a setting to the config file without disturbing its comments;
+  `:config` and `:config reload`; `transparent_background`.
+- **Sessions** — started without files, termi reopens the last session in the
+  directory, splits and carets included.
+- **Command line** — Tab completion of commands, paths, options and values,
+  history on `↑` `↓` for commands and searches, kept across sessions; `:wa`,
+  `:qa`, `:wqa`, `:wq <path>`; quitting names the unsaved files.
+- **Display** — indentation folds (`za` `zc` `zo` `zR` `zM`), `:set list`,
+  indent guides, matching-bracket highlight, a braille minimap, and the exit
+  code of a finished terminal command. Comment toggling on `gc` and `Ctrl+/`.
+- **Startup options** — `file:line:column`, `+line`, `-R`, `--config`,
+  `--clean`, `--no-session` and `-` for standard input.
+- `:help [topic]` opens the reference as a searchable read-only buffer.
+- In the file tree, `h` closes a folder or steps out to the one holding the
+  selection, and `Backspace` shows the directory above the tree's root.
+
+### Changed
+
+- `c` in visual mode changes the selection, as in vi; `Ctrl+X` still cuts.
+- `↑` and `↓` in the search prompt walk the search history; `Ctrl+N` and
+  `Ctrl+P` still step through matches.
+- The gutter has a sign column; `sign_column = false` takes it away.
+- Saving keeps the permissions of the file it replaces.
+- The editor is now a library with a thin binary, and has integration,
+  property and fuzz tests and benchmarks.
+
+### Fixed
+
+- Undo after reloading a file that changed on disk replayed old edits into the
+  new text.
+- `:s` changes could not be undone.
+- With several cursors, an edit that added or removed a line at one of them
+  left the cursors after it on the wrong line.
+- A highlighting rule with capture groups of its own shifted every rule after
+  it, and could crash on some lines.
+- Language server answers about a file reached through a symlink — every
+  temporary directory on macOS — and every file on Windows never found their
+  buffer, so diagnostics, renames and jumps went nowhere.
+
 ## [0.1.8] - 2026-09-17
 
 ### Added
@@ -191,7 +274,8 @@ First release.
   slots they name.
 - **Configuration** — TOML, with every key optional and unknown keys reported.
 
-[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.1.8...HEAD
+[Unreleased]: https://github.com/tuna4ll/termi/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/tuna4ll/termi/compare/v0.1.8...v0.2.0
 [0.1.8]: https://github.com/tuna4ll/termi/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/tuna4ll/termi/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/tuna4ll/termi/compare/v0.1.5...v0.1.6
