@@ -267,28 +267,27 @@ pub struct History {
 const HISTORY_LIMIT: usize = 200;
 
 impl History {
-    fn location() -> Option<PathBuf> {
-        (!cfg!(test)).then(|| crate::config::data_dir().join("history.json"))
+    fn location() -> PathBuf {
+        crate::config::data_dir().join("history.json")
     }
 
     /// The history saved by the last session, or an empty one.
     #[must_use]
     pub fn load() -> Self {
-        Self::location()
-            .and_then(|path| std::fs::read_to_string(path).ok())
+        std::fs::read_to_string(Self::location())
+            .ok()
             .and_then(|json| serde_json::from_str(&json).ok())
             .unwrap_or_default()
     }
 
     /// Write the history for the next session.
     pub fn save(&self) {
-        if let Some(path) = Self::location() {
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            if let Ok(json) = serde_json::to_string(self) {
-                let _ = crate::filesystem::write_file(&path, &json);
-            }
+        let path = Self::location();
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(json) = serde_json::to_string(self) {
+            let _ = crate::filesystem::write_file(&path, &json);
         }
     }
 

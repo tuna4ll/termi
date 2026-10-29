@@ -103,7 +103,8 @@ fn screen_line(app: &App, row: ScreenRow) -> usize {
     let window = app.window();
     let last = app.buffer().document.last_line();
     let height = usize::from(window.area.height).max(1);
-    let top = window.view.top_line;
+    // The view can be left below the end of a document that just shrank.
+    let top = window.view.top_line.min(last);
     let bottom = (top + height - 1).min(last);
     let margin = app.config.scrolloff.min(height.saturating_sub(1) / 2);
     match row {
@@ -146,6 +147,7 @@ pub fn goto(app: &mut App, goal: Goal, count: usize) {
         }
         return;
     };
+    let target = app.buffer().document.clamp(target, allow_eol);
     if matches!(goal, Goal::Mark { .. } | Goal::Screen(_)) {
         app.window_mut().record_jump();
     }

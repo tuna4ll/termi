@@ -106,7 +106,7 @@ pub fn attach(app: &mut App, index: BufferId) {
         return;
     }
     if !app.lsp.clients.contains_key(&language) {
-        if cfg!(test) || app.lsp.unavailable.contains_key(&language) {
+        if app.ephemeral || app.lsp.unavailable.contains_key(&language) {
             return;
         }
         let Some(config) = server_for(app, &language) else {
@@ -773,8 +773,8 @@ mod tests {
     use crate::editor::document::Document;
 
     /// An editor with `text` in a Rust file and the mock server attached.
-    fn editor(text: &str) -> (App, PathBuf) {
-        let root = std::env::temp_dir().join(format!("termi-lsp-{}", text.len()));
+    fn editor(name: &str, text: &str) -> (App, PathBuf) {
+        let root = std::env::temp_dir().join(format!("termi-lsp-{name}"));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create fixture");
         let path = root.join("main.rs");
@@ -807,7 +807,7 @@ mod tests {
 
     #[test]
     fn diagnostics_arrive_for_an_opened_file() {
-        let (mut app, path) = editor("bad code\n");
+        let (mut app, path) = editor("diagnostics", "bad code\n");
         wait(&mut app, |app| app.lsp.diagnostics.contains_key(&path));
         let found = &app.lsp.diagnostics[&path][0];
         assert_eq!(found.message, "bad thing");
@@ -819,7 +819,7 @@ mod tests {
 
     #[test]
     fn hover_shows_a_popup_and_definition_jumps() {
-        let (mut app, _) = editor("one\ntwo three\n");
+        let (mut app, _) = editor("hover", "one\ntwo three\n");
         wait(&mut app, |app| app.lsp.clients["rust"].is_ready());
         request(&mut app, RequestKind::Hover);
         wait(&mut app, |app| app.popup.is_some());
@@ -843,7 +843,7 @@ mod tests {
 
     #[test]
     fn completion_filters_as_typed_and_inserts_the_choice() {
-        let (mut app, _) = editor("\n");
+        let (mut app, _) = editor("completion", "\n");
         wait(&mut app, |app| app.lsp.clients["rust"].is_ready());
         app.mode = Mode::Insert;
         app.edit().insert_text("al");
@@ -869,7 +869,7 @@ mod tests {
 
     #[test]
     fn snippet_completions_insert_their_text() {
-        let (mut app, _) = editor("\n");
+        let (mut app, _) = editor("snippet", "\n");
         wait(&mut app, |app| app.lsp.clients["rust"].is_ready());
         app.mode = Mode::Insert;
         app.edit().insert_text("pu");
@@ -881,7 +881,7 @@ mod tests {
 
     #[test]
     fn rename_and_format_edit_the_buffer_as_one_step() {
-        let (mut app, _) = editor("old = 1\n");
+        let (mut app, _) = editor("rename", "old = 1\n");
         wait(&mut app, |app| app.lsp.clients["rust"].is_ready());
         rename(&mut app, "new");
         wait(&mut app, |app| {
@@ -897,7 +897,7 @@ mod tests {
 
     #[test]
     fn bracket_d_walks_the_diagnostics() {
-        let (mut app, path) = editor("bad code\nmore\n");
+        let (mut app, path) = editor("bracket-d", "bad code\nmore\n");
         wait(&mut app, |app| app.lsp.diagnostics.contains_key(&path));
         app.window_mut()
             .cursor_mut()

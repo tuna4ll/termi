@@ -11,8 +11,27 @@ cargo clippy --all-targets -- -D warnings
 cargo test
 ```
 
-CI runs exactly these, plus the test suite on Linux, macOS and Windows and a
-build against the minimum supported Rust version. All of it has to pass.
+CI runs exactly these, plus the test suite on Linux, macOS and Windows, a
+build against the minimum supported Rust version, and a check that the
+benchmarks and fuzz targets still compile. All of it has to pass.
+
+## Where the tests live
+
+- **Unit tests** sit at the bottom of the module they test.
+- **`tests/`** drives the editor from outside, through the library: typing
+  real key sequences (`tests/editing.rs`), reading and writing real files
+  (`tests/files.rs`), drawing whole frames (`tests/render.rs`) and running the
+  binary (`tests/cli.rs`). `tests/common` builds an `App::headless`, which
+  writes nothing outside the test — no swap files, sessions or histories.
+- **`tests/properties.rs`** checks invariants against generated input with
+  `proptest`: undo restores any edit sequence, the grammar and the
+  highlighters never panic, random keys never bring the editor down. A case
+  that fails is saved to `tests/properties.proptest-regressions`; commit it,
+  so the case is replayed on every run from then on.
+- **`benches/core.rs`** times the hot paths on a 100,000-line file:
+  `cargo bench`.
+- **`fuzz/`** holds `cargo-fuzz` targets for key sequences, highlighting and
+  file decoding: `cargo +nightly fuzz run keys`.
 
 ## What the code expects of you
 
@@ -50,6 +69,9 @@ update `rust-version` in `Cargo.toml` and the `msrv` job in
 
 ## Adding a language to the highlighter
 
-Add a file under `src/syntax/languages/`, export a `&'static Language`, and add
-one line to `all()`. No engine or rendering change should be necessary; if one
+Languages are Lua scripts. Add one under `runtime/syntax/`, written exactly as
+a user would write one in their own `syntax/` directory — the built-in ones
+are the examples — and add one line to `BUILTIN` in
+`src/syntax/languages/mod.rs`. Add a line or two to the engine's tests showing
+the shapes it reads. No engine or rendering change should be necessary; if one
 is, that is worth discussing in the issue first.

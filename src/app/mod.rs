@@ -96,7 +96,9 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
         }
     }
     lsp::shutdown(app);
-    app.history.save();
+    if !app.ephemeral {
+        app.history.save();
+    }
     if app.config.restore_session && !app.startup.no_session && !app.startup.clean {
         // A session that cannot be written is not worth an error on the way
         // out; the files themselves are safe.

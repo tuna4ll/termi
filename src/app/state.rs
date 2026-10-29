@@ -137,6 +137,10 @@ pub struct App {
     pub history_draft: String,
     /// Language servers and what they have said.
     pub lsp: super::lsp::LspState,
+    /// An editor that leaves no trace: no swap files, undo histories,
+    /// sessions or history on disk, and no git or language server processes.
+    /// What tests, benchmarks and fuzzing run.
+    pub ephemeral: bool,
     /// Incremental search state, kept across searches so `n` can repeat one.
     pub search: Search,
     /// File browser, built on first use and kept afterwards so the expanded
@@ -233,20 +237,26 @@ impl App {
         self.info("config reloaded");
     }
 
-    /// Start from `config` without reading anything from disk.
-    ///
-    /// Test-only: an editor built by [`App::new`] would behave differently
-    /// depending on whose machine it ran on.
-    #[cfg(test)]
+    /// An [`ephemeral`](App::ephemeral) editor on `config`, reading nothing
+    /// from disk: one built by [`App::new`] would behave differently depending
+    /// on whose machine it ran on, and would leave files behind.
     #[must_use]
-    pub fn with_config(config: Config) -> Self {
+    pub fn headless(config: Config) -> Self {
         let mut theme = Theme::builtin(&config.theme);
         if config.transparent_background {
             theme.make_transparent();
         }
         let mut app = Self::assemble(config, theme);
+        app.ephemeral = true;
         app.compile_mappings();
         app
+    }
+
+    /// [`App::headless`], under the name the unit tests know it by.
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_config(config: Config) -> Self {
+        Self::headless(config)
     }
 
     fn assemble(config: Config, theme: Theme) -> Self {
@@ -280,6 +290,7 @@ impl App {
             history_cursor: None,
             history_draft: String::new(),
             lsp: super::lsp::LspState::default(),
+            ephemeral: false,
             search: Search::default(),
             tree: None,
             tree_selected: 0,
@@ -533,7 +544,7 @@ impl App {
         let limit = self.config.large_file_mb.saturating_mul(1 << 20);
         buffer.large = std::fs::metadata(&path).is_ok_and(|meta| meta.len() > limit);
         self.configure_buffer(&mut buffer, existed);
-        if self.config.git && !buffer.large && !cfg!(test) {
+        if self.config.git && !buffer.large && !self.ephemeral {
             buffer.refresh_git();
         }
         let undo_dir = self.undo_dir().filter(|_| !buffer.large);
@@ -601,7 +612,7 @@ impl App {
     /// Where swap files go, when they are wanted at all.
     #[must_use]
     pub fn swap_dir(&self) -> Option<PathBuf> {
-        if cfg!(test) || !self.config.swap_files {
+        if self.ephemeral || !self.config.swap_files {
             return None;
         }
         Some(config::data_dir().join("swap"))
@@ -932,11 +943,11 @@ impl App {
 
     /// Where persistent undo histories go, when they are wanted at all.
     ///
-    /// Tests never write there: their files are throwaway, and the directory
-    /// is the real user's.
+    /// An ephemeral editor never writes there: its files are throwaway, and
+    /// the directory is the real user's.
     #[must_use]
     pub fn undo_dir(&self) -> Option<PathBuf> {
-        if cfg!(test) || !self.config.persistent_undo {
+        if self.ephemeral || !self.config.persistent_undo {
             return None;
         }
         Some(config::data_dir().join("undo"))
@@ -1045,7 +1056,7 @@ impl App {
         };
         let selected = tree.path_at(self.tree_selected).map(Path::to_path_buf);
         tree.refresh();
-        if self.config.git && !cfg!(test) {
+        if self.config.git && !self.ephemeral {
             self.tree_status = crate::git::statuses(tree.root());
         }
         let found = selected.and_then(|path| tree.index_of(&path));

@@ -142,8 +142,7 @@ pub struct Language {
     pub macro_suffix: bool,
     /// Whether an initial capital letter suggests a type name.
     pub capitalised_types: bool,
-    /// Extra patterns tried *before* the generic ones, in order. Sub-groups
-    /// must be non-capturing.
+    /// Extra patterns tried *before* the generic ones, in order.
     pub extra_rules: Vec<(String, HighlightKind)>,
     /// Suppress the generic identifier, operator and punctuation rules, for
     /// prose and for formats that only want their own rules.
@@ -158,12 +157,21 @@ struct Registry {
     errors: Vec<String>,
 }
 
+/// Whether the user's own scripts are left out, as [`builtin_only`] asks.
+static BUILTIN_ONLY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Load only the built-in languages, ignoring the user's `syntax/`
+/// directory. Takes effect only before the first language is looked up, so
+/// tests and benchmarks call it first: a definition on the developer's
+/// machine must not change what they see.
+pub fn builtin_only() {
+    BUILTIN_ONLY.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The user's own language scripts.
-///
-/// Tests never look there: a definition on the developer's machine must not
-/// change what the tests see.
 fn user_dir() -> Option<PathBuf> {
-    (!cfg!(test)).then(|| crate::config::config_dir().join("syntax"))
+    let skip = cfg!(test) || BUILTIN_ONLY.load(std::sync::atomic::Ordering::Relaxed);
+    (!skip).then(|| crate::config::config_dir().join("syntax"))
 }
 
 impl Registry {

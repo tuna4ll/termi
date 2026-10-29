@@ -1,30 +1,4 @@
-//! `termi` — a modern, modular terminal code editor.
-//!
-//! The crate is split into layers that only depend downwards:
-//!
-//! - [`app`] drives the event loop and owns the state
-//! - [`ui`] renders that state; [`renderer`] owns the terminal
-//! - [`input`] turns keys into actions
-//! - [`editor`] manipulates text and knows nothing about either
-//! - [`config`], [`theme`], [`syntax`], [`search`], [`undo`], [`clipboard`],
-//!   [`filesystem`] and [`git`] are leaf services used by the layers above
-
-mod app;
-mod clipboard;
-mod config;
-mod editor;
-mod filesystem;
-mod git;
-mod input;
-mod lsp;
-mod picker;
-mod renderer;
-mod search;
-mod syntax;
-mod terminal;
-mod theme;
-mod ui;
-mod undo;
+//! The `termi` binary: read the command line, then run the editor.
 
 use std::ffi::OsString;
 use std::io::Read;
@@ -33,8 +7,9 @@ use std::process::ExitCode;
 
 use anyhow::Result;
 
-use crate::app::state::Startup;
-use crate::editor::cursor::Position;
+use termi::app::state::Startup;
+use termi::editor::cursor::Position;
+use termi::{app, editor, filesystem, renderer};
 
 const USAGE: &str = "\
 termi — a terminal code editor

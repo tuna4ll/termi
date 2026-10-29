@@ -211,9 +211,14 @@ impl Window {
             return None;
         }
         // Leaving the newest position for the first time remembers it, so
-        // jumping forward again can come back.
+        // jumping forward again can come back. Remembering it can replace the
+        // only entry — a jump that went nowhere — and then there is nothing
+        // to go back to.
         if self.jump_index == self.jumps.len() {
             self.record_jump();
+            if self.jumps.len() < 2 {
+                return None;
+            }
             self.jump_index = self.jumps.len() - 1;
         }
         self.jump_index -= 1;
@@ -441,6 +446,14 @@ mod tests {
 
     fn window() -> Window {
         Window::new(0)
+    }
+
+    #[test]
+    fn jumping_back_from_the_only_place_ever_jumped_from_goes_nowhere() {
+        let mut win = window();
+        win.record_jump();
+        assert_eq!(win.jump_back(), None);
+        assert_eq!(win.jump_back(), None);
     }
 
     #[test]

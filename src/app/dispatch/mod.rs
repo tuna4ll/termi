@@ -3,6 +3,9 @@
 
 mod motion;
 mod operator;
+mod pointer;
+mod search;
+mod tree;
 #[cfg(test)]
 mod vim_tests;
 
@@ -16,14 +19,22 @@ use crate::clipboard::registers::Register;
 use crate::editor::cursor::Motion;
 use crate::editor::document::indent;
 use crate::editor::selection::Range;
-use crate::editor::window::{VisualMemory, WindowId};
+use crate::editor::window::VisualMemory;
 use crate::input::{Action, Operator, notation};
 use crate::picker::PickerTarget;
-use crate::ui::widgets::editor_view;
 
 /// How many keys one burst of macro playback may feed in before it is
 /// stopped, so a macro that calls itself cannot hang the editor.
 const MACRO_KEY_LIMIT: usize = 100_000;
+
+use pointer::{click, close_window, cycle_window, drag, focus_window};
+use search::{
+    MATCH_COUNT_CAP, cancel_search, origin_offset, repeat_search, search_word, seek_from_origin,
+};
+use tree::{
+    activate_tree_entry, begin_tree_creation, begin_tree_delete, begin_tree_path,
+    cancel_tree_delete, delete_tree_path, move_tree_selection, toggle_tree,
+};
 
 pub fn apply(app: &mut App, action: Action) -> Result<()> {
     record_change(app, &action);
@@ -555,273 +566,7 @@ fn insert_char(app: &mut App, ch: char) {
     }
 }
 
-const MATCH_COUNT_CAP: usize = 10_000;
-
-fn origin_offset(app: &App) -> usize {
-    app.buffer()
-        .document
-        .pos_to_char(app.window().cursor().head)
-}
-
-fn seek_from_origin(app: &mut App) {
-    let origin = app.search.origin();
-    let forward = app.search.forward;
-    let Some(found) = app.search.find(&app.buffer().document, origin, forward) else {
-        return;
-    };
-    let position = app.buffer().document.char_to_pos(found.start);
-    app.window_mut().cursor_mut().move_to(position, false);
-}
-
-fn cancel_search(app: &mut App) -> Result<()> {
-    let origin = app.search.origin();
-    let position = app.buffer().document.char_to_pos(origin);
-    app.window_mut().cursor_mut().move_to(position, false);
-    app.search.set_query(String::new());
-    enter_mode(app, Mode::Normal);
-    Ok(())
-}
-
-fn repeat_search(app: &mut App, forward: bool) {
-    if !app.search.is_active() {
-        app.info("no previous search");
-        return;
-    }
-    let from = origin_offset(app);
-    let Some(found) = app.search.find(&app.buffer().document, from, forward) else {
-        app.error(format!("no match for {}", app.search.query));
-        return;
-    };
-    let position = app.buffer().document.char_to_pos(found.start);
-    app.window_mut().cursor_mut().move_to(position, false);
-}
-
-fn close_window(app: &mut App) {
-    let focus = app.windows.focus();
-    if !app.close_window(focus) {
-        app.info("only one window");
-    }
-}
-
-fn focus_window(app: &mut App, id: WindowId) {
-    if id == app.windows.focus() {
-        return;
-    }
-    app.windows.set_focus(id);
-    app.sync_mode_to_focus();
-}
-
-fn click(app: &mut App, x: u16, y: u16) {
-    let Some(id) = app.windows.at(x, y) else {
-        return;
-    };
-    if id != app.windows.focus() {
-        focus_window(app, id);
-    } else if app.mode.is_visual() {
-        enter_mode(app, Mode::Normal);
-    }
-    if app.terminal_focused() {
-        return;
-    }
-    place_caret(app, x, y, false);
-}
-
-fn drag(app: &mut App, x: u16, y: u16) {
-    if app.terminal_focused() {
-        return;
-    }
-    let area = app.window().area;
-    let x = x.clamp(area.x, area.right().saturating_sub(1).max(area.x));
-    let y = y.clamp(area.y, area.bottom().saturating_sub(1).max(area.y));
-    place_caret(app, x, y, true);
-}
-
-fn place_caret(app: &mut App, x: u16, y: u16, extend: bool) {
-    let window = app.window();
-    let config = app.buffer_config(window.buffer);
-    let position = editor_view::position_at(
-        &app.buffers[window.buffer],
-        window,
-        &config,
-        window.area,
-        x,
-        y,
-    );
-    let Some(position) = position else {
-        return;
-    };
-    let allow_eol = app.mode.is_insert() || (extend && !app.mode.is_visual());
-    let position = app.buffer().document.clamp(position, allow_eol);
-
-    app.edit().checkpoint();
-    app.window_mut().clear_secondary_cursors();
-    app.window_mut().cursor_mut().move_to(position, extend);
-}
-
-fn cycle_window(app: &mut App) {
-    let order = app.windows.ids();
-    let current = order
-        .iter()
-        .position(|id| *id == app.windows.focus())
-        .unwrap_or(0);
-    let next = order[(current + 1) % order.len()];
-    focus_window(app, next);
-}
-
-fn toggle_tree(app: &mut App) {
-    app.tree_visible = !app.tree_visible;
-    if !app.tree_visible {
-        enter_mode(app, Mode::Normal);
-        return;
-    }
-    if app.tree.is_none() {
-        let root = app.tree_root();
-        app.tree = Some(crate::filesystem::tree::Tree::new(root));
-        app.refresh_tree();
-    } else {
-        // Opening the panel is the natural way to ask "what is in there now?",
-        // so it re-reads even when the watcher is off or never saw the change.
-        app.refresh_tree();
-    }
-    enter_mode(app, Mode::Tree);
-}
-
-fn move_tree_selection(app: &mut App, delta: isize) {
-    let Some(tree) = app.tree.as_ref() else {
-        return;
-    };
-    let last = tree.entries().len().saturating_sub(1);
-    app.tree_selected = match delta {
-        isize::MIN => 0,
-        isize::MAX => last,
-        delta if delta < 0 => app.tree_selected.saturating_sub(delta.unsigned_abs()),
-        delta => app
-            .tree_selected
-            .saturating_add(delta.unsigned_abs())
-            .min(last),
-    };
-}
-
-fn activate_tree_entry(app: &mut App) {
-    let Some(tree) = app.tree.as_mut() else {
-        return;
-    };
-    let Some(path) = tree.activate(app.tree_selected) else {
-        let last = app
-            .tree
-            .as_ref()
-            .map_or(0, |t| t.entries().len().saturating_sub(1));
-        app.tree_selected = app.tree_selected.min(last);
-        return;
-    };
-    match app.open(path) {
-        Ok(()) => {
-            app.tree_visible = false;
-            enter_mode(app, Mode::Normal);
-        }
-        Err(error) => app.error(error.to_string()),
-    }
-}
-
-fn begin_tree_creation(app: &mut App, directory: bool) {
-    let Some(tree) = app.tree.as_ref() else {
-        return;
-    };
-    let parent = tree.creation_directory(app.tree_selected);
-    let command = if directory { "mkdir" } else { "touch" };
-    let separator = std::path::MAIN_SEPARATOR;
-    let mut prefix = parent.as_os_str().to_string_lossy().into_owned();
-    if !prefix.ends_with(separator) {
-        prefix.push(separator);
-    }
-
-    enter_mode(app, Mode::Command);
-    app.command_line = format!("{command} {prefix}");
-}
-
-fn begin_tree_path(app: &mut App, command: &str, keep_name: bool) {
-    let Some(path) = app
-        .tree
-        .as_ref()
-        .and_then(|tree| tree.path_at(app.tree_selected))
-        .map(std::path::Path::to_path_buf)
-    else {
-        return;
-    };
-    let destination = if keep_name {
-        path.clone()
-    } else {
-        path.parent()
-            .map(std::path::Path::to_path_buf)
-            .unwrap_or_default()
-    };
-    app.tree_source = Some(path);
-    enter_mode(app, Mode::Command);
-    let separator = std::path::MAIN_SEPARATOR;
-    let mut destination = destination.as_os_str().to_string_lossy().into_owned();
-    if !keep_name && !destination.ends_with(separator) {
-        destination.push(separator);
-    }
-    app.command_line = format!("{command} {destination}");
-}
-
-fn begin_tree_delete(app: &mut App) {
-    let Some(path) = app
-        .tree
-        .as_ref()
-        .and_then(|tree| tree.path_at(app.tree_selected))
-        .map(std::path::Path::to_path_buf)
-    else {
-        return;
-    };
-    if app.has_dirty_under(&path) {
-        app.error(format!(
-            "save or close modified files before deleting {}",
-            path.display()
-        ));
-        return;
-    }
-    let kind = if path.is_dir() { "directory" } else { "file" };
-    app.pending_delete = Some(path.clone());
-    app.popup = Some((
-        format!("delete {kind} permanently?"),
-        format!("{}\n\nThis cannot be undone.", path.display()),
-    ));
-    app.mode = Mode::Confirm;
-}
-
-fn cancel_tree_delete(app: &mut App) {
-    app.pending_delete = None;
-    app.mode = if app.tree_visible {
-        Mode::Tree
-    } else {
-        Mode::Normal
-    };
-}
-
-fn delete_tree_path(app: &mut App) {
-    let Some(path) = app.pending_delete.take() else {
-        return cancel_tree_delete(app);
-    };
-    if app.has_dirty_under(&path) {
-        app.error(format!(
-            "save or close modified files before deleting {}",
-            path.display()
-        ));
-        return cancel_tree_delete(app);
-    }
-    match crate::filesystem::delete_path(&path) {
-        Ok(()) => {
-            app.close_buffers_under(&path);
-            app.refresh_tree();
-            app.info(format!("deleted {}", path.display()));
-        }
-        Err(error) => app.error(error.to_string()),
-    }
-    cancel_tree_delete(app);
-}
-
-fn enter_mode(app: &mut App, mode: Mode) {
+pub(super) fn enter_mode(app: &mut App, mode: Mode) {
     if app.mode == mode {
         return;
     }
@@ -991,21 +736,6 @@ fn jump_hunk(app: &mut App, forward: bool) {
             "no change above"
         }),
     }
-}
-
-/// `*` and `#` — search for the word under the caret.
-fn search_word(app: &mut App, forward: bool, whole: bool) {
-    let Some(word) = operator::word_under_caret(app) else {
-        app.error("no word under the caret");
-        return;
-    };
-    app.search.set_word(&word, whole, forward);
-    app.registers.set_named(
-        '/',
-        Register::new(app.search.query.clone(), RegisterKind::Charwise),
-    );
-    app.window_mut().record_jump();
-    repeat_search(app, forward);
 }
 
 fn close_picker(app: &mut App) {
@@ -1179,7 +909,7 @@ mod tests {
     use crate::editor::buffer::Buffer;
     use crate::editor::cursor::Position;
     use crate::editor::document::Document;
-    use crate::editor::window::{Area, Axis, Side};
+    use crate::editor::window::{Area, Axis, Side, WindowId};
 
     fn app() -> App {
         App::with_config(Config {

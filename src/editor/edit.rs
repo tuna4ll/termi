@@ -9,6 +9,37 @@ use crate::editor::selection::Range;
 use crate::editor::window::Window;
 use crate::undo::Change;
 
+/// Every caret's character offset during an edit at several of them.
+///
+/// Edits run from the last caret back, which keeps the offsets of the carets
+/// still to come valid; the ones already done sit *after* each new edit and
+/// would be left pointing at the wrong line if they were kept as positions.
+/// Offsets can simply be moved along.
+struct Carets(Vec<usize>);
+
+impl Carets {
+    fn of(window: &Window, document: &Document) -> Self {
+        Self(
+            window
+                .cursors()
+                .iter()
+                .map(|cursor| document.pos_to_char(cursor.head))
+                .collect(),
+        )
+    }
+
+    /// Account for `removed` characters at `start` replaced by `inserted`.
+    fn replaced(&mut self, start: usize, removed: usize, inserted: usize) {
+        for offset in &mut self.0 {
+            if *offset >= start + removed {
+                *offset = *offset - removed + inserted;
+            } else if *offset > start {
+                *offset = start;
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Edit<'a> {
     pub buffer: &'a mut Buffer,
@@ -25,11 +56,11 @@ impl<'a> Edit<'a> {
         if text.is_empty() {
             return;
         }
+        let mut carets = Carets::of(self.window, &self.buffer.document);
         for index in self.window.edit_order() {
-            self.insert_at(index, text, 0);
+            self.insert_at(&mut carets, index, text, 0);
         }
-        self.invalidate_from_first_cursor();
-        self.window.resort();
+        self.land(carets);
     }
 
     pub fn insert_char(&mut self, ch: char, config: &Config) {
@@ -37,47 +68,49 @@ impl<'a> Edit<'a> {
             self.insert_text(&ch.to_string());
             return;
         }
+        let mut carets = Carets::of(self.window, &self.buffer.document);
         let mut text = String::with_capacity(8);
         for index in self.window.edit_order() {
-            let before = self.window.cursors()[index].head;
+            let before = self.buffer.document.char_to_pos(carets.0[index]);
             match pairs::resolve(&self.buffer.document, before, ch) {
                 Insertion::Plain => {
                     text.clear();
                     text.push(ch);
-                    self.insert_at(index, &text, 0);
+                    self.insert_at(&mut carets, index, &text, 0);
                 }
                 Insertion::Pair(close) => {
                     text.clear();
                     text.push(ch);
                     text.push(close);
-                    self.insert_at(index, &text, 1);
+                    self.insert_at(&mut carets, index, &text, 1);
                 }
-                Insertion::Skip => {
-                    let after = Position::new(before.line, before.col + 1);
-                    self.window.cursors_mut()[index].move_to(after, false);
-                }
+                Insertion::Skip => carets.0[index] += 1,
             }
         }
-        self.invalidate_from_first_cursor();
-        self.window.resort();
+        self.land(carets);
     }
 
-    fn insert_at(&mut self, index: usize, text: &str, back: usize) {
-        let before = self.window.cursors()[index].head;
-        let at = self.buffer.document.pos_to_char(before);
+    /// Insert `text` at one caret, leaving it `back` characters short of
+    /// the end of what was inserted.
+    fn insert_at(&mut self, carets: &mut Carets, index: usize, text: &str, back: usize) {
+        let at = carets.0[index];
+        let before = self.buffer.document.char_to_pos(at);
+        let length = text.chars().count();
 
         self.buffer.document.insert(at, text);
-        let landed = at + text.chars().count() - back;
+        let landed = at + length - back;
         let after = self.buffer.document.char_to_pos(landed);
         self.buffer
             .history
             .record(Change::insertion(at, text), before, after);
-        self.window.cursors_mut()[index].move_to(after, false);
+        carets.replaced(at, 0, length);
+        carets.0[index] = landed;
     }
 
     pub fn insert_newline(&mut self, config: &Config) {
+        let mut carets = Carets::of(self.window, &self.buffer.document);
         for index in self.window.edit_order() {
-            let before = self.window.cursors()[index].head;
+            let before = self.buffer.document.char_to_pos(carets.0[index]);
 
             let mut text = String::from("\n");
             if config.auto_indent {
@@ -99,10 +132,9 @@ impl<'a> Edit<'a> {
                 text.push_str(&trailer);
             }
 
-            self.insert_at(index, &text, back);
+            self.insert_at(&mut carets, index, &text, back);
         }
-        self.invalidate_from_first_cursor();
-        self.window.resort();
+        self.land(carets);
     }
 
     pub fn insert_indent(&mut self, config: &Config) {
@@ -110,65 +142,57 @@ impl<'a> Edit<'a> {
             self.insert_text("\t");
             return;
         }
+        let mut carets = Carets::of(self.window, &self.buffer.document);
         for index in self.window.edit_order() {
-            let before = self.window.cursors()[index].head;
+            let before = self.buffer.document.char_to_pos(carets.0[index]);
             let width = config.tab_width - (before.col % config.tab_width);
-            let text = " ".repeat(width);
-            let at = self.buffer.document.pos_to_char(before);
-
-            self.buffer.document.insert(at, &text);
-            let after = self.buffer.document.char_to_pos(at + width);
-            self.buffer
-                .history
-                .record(Change::insertion(at, text.as_str()), before, after);
-            self.window.cursors_mut()[index].move_to(after, false);
+            self.insert_at(&mut carets, index, &" ".repeat(width), 0);
         }
-        self.invalidate_from_first_cursor();
-        self.window.resort();
+        self.land(carets);
     }
 
     pub fn delete_backward(&mut self, config: &Config) {
+        let mut carets = Carets::of(self.window, &self.buffer.document);
         for index in self.window.edit_order() {
-            let before = self.window.cursors()[index].head;
-            let at = self.buffer.document.pos_to_char(before);
+            let at = carets.0[index];
             if at == 0 {
                 continue;
             }
+            let before = self.buffer.document.char_to_pos(at);
             let start = at - self.backspace_width(before, config);
             let end = if config.auto_pairs && pairs::surrounds(&self.buffer.document, before) {
                 at + 1
             } else {
                 at
             };
-
-            let removed = self.buffer.document.remove(start, end);
-            let after = self.buffer.document.char_to_pos(start);
-            self.buffer
-                .history
-                .record(Change::deletion(start, removed), before, after);
-            self.window.cursors_mut()[index].move_to(after, false);
+            self.remove_at(&mut carets, index, start, end);
         }
-        self.invalidate_from_first_cursor();
-        self.window.resort();
+        self.land(carets);
     }
 
     pub fn delete_forward(&mut self) {
+        let mut carets = Carets::of(self.window, &self.buffer.document);
         for index in self.window.edit_order() {
-            let before = self.window.cursors()[index].head;
-            let at = self.buffer.document.pos_to_char(before);
+            let at = carets.0[index];
             if at >= self.buffer.document.len_chars() {
                 continue;
             }
-
-            let removed = self.buffer.document.remove(at, at + 1);
-            let after = self.buffer.document.char_to_pos(at);
-            self.buffer
-                .history
-                .record(Change::deletion(at, removed), before, after);
-            self.window.cursors_mut()[index].move_to(after, false);
+            self.remove_at(&mut carets, index, at, at + 1);
         }
-        self.invalidate_from_first_cursor();
-        self.window.resort();
+        self.land(carets);
+    }
+
+    /// Remove `[start, end)` on behalf of one caret, which lands at `start`.
+    fn remove_at(&mut self, carets: &mut Carets, index: usize, start: usize, end: usize) {
+        let before = self.buffer.document.char_to_pos(carets.0[index]);
+        let removed = self.buffer.document.remove(start, end);
+        let length = removed.chars().count();
+        let after = self.buffer.document.char_to_pos(start);
+        self.buffer
+            .history
+            .record(Change::deletion(start, removed), before, after);
+        carets.replaced(start, length, 0);
+        carets.0[index] = start;
     }
 
     pub fn delete_word_backward(&mut self) {
@@ -187,48 +211,54 @@ impl<'a> Edit<'a> {
 
     /// Each chord is its own undo step: a word is too big a bite to merge.
     fn delete_word(&mut self, span: impl Fn(&Document, Position) -> (usize, usize)) {
+        let mut carets = Carets::of(self.window, &self.buffer.document);
         for index in self.window.edit_order() {
-            let before = self.window.cursors()[index].head;
-            let (start, end) = span(&self.buffer.document, before);
+            let head = self.buffer.document.char_to_pos(carets.0[index]);
+            let (start, end) = span(&self.buffer.document, head);
             if start >= end {
                 continue;
             }
-
-            let removed = self.buffer.document.remove(start, end);
-            let after = self.buffer.document.char_to_pos(start);
-            self.buffer
-                .history
-                .record(Change::deletion(start, removed), before, after);
-            self.window.cursors_mut()[index].move_to(after, false);
+            self.remove_at(&mut carets, index, start, end);
         }
-        self.invalidate_from_first_cursor();
-        self.window.resort();
+        self.land(carets);
         self.checkpoint();
     }
 
     pub fn delete_selections(&mut self) -> bool {
-        let mut removed_any = false;
+        // Every span is measured before anything changes: edits run from the
+        // last caret back, so text before an unprocessed caret never moves.
+        let spans: Vec<Option<Range>> = self
+            .window
+            .cursors()
+            .iter()
+            .map(|cursor| {
+                cursor
+                    .has_selection()
+                    .then(|| Range::between(cursor, &self.buffer.document))
+            })
+            .collect();
+        if spans.iter().all(Option::is_none) {
+            return false;
+        }
+        let mut carets = Carets::of(self.window, &self.buffer.document);
         for index in self.window.edit_order() {
-            let cursor = self.window.cursors()[index];
-            if !cursor.has_selection() {
-                continue;
+            if let Some(range) = spans[index] {
+                self.remove_at(&mut carets, index, range.start, range.end);
             }
-            let range = Range::between(&cursor, &self.buffer.document);
-            let before = cursor.head;
+        }
+        self.land(carets);
+        true
+    }
 
-            let removed = self.buffer.document.remove(range.start, range.end);
-            let after = self.buffer.document.char_to_pos(range.start);
-            self.buffer
-                .history
-                .record(Change::deletion(range.start, removed), before, after);
-            self.window.cursors_mut()[index].move_to(after, false);
-            removed_any = true;
+    /// Put every caret where the edit left it, and repair what depends on
+    /// where the edit happened.
+    fn land(&mut self, carets: Carets) {
+        for (index, offset) in carets.0.into_iter().enumerate() {
+            let position = self.buffer.document.char_to_pos(offset);
+            self.window.cursors_mut()[index].move_to(position, false);
         }
-        if removed_any {
-            self.invalidate_from_first_cursor();
-            self.window.resort();
-        }
-        removed_any
+        self.invalidate_from_first_cursor();
+        self.window.resort();
     }
 
     pub fn delete_range(&mut self, range: Range) -> String {
@@ -427,7 +457,9 @@ impl<'a> Edit<'a> {
     }
 
     fn invalidate_from_first_cursor(&mut self) {
-        let line = self.window.cursors()[0].head.line;
+        // Nothing before the earliest edit changed; its line is the first
+        // whose highlighting may have.
+        let line = self.window.cursors()[0].head.line.saturating_sub(1);
         self.buffer.invalidate_syntax_from(line);
     }
 
@@ -501,6 +533,22 @@ mod tests {
 
     fn config() -> Config {
         Config::default()
+    }
+
+    #[test]
+    fn a_line_break_at_one_caret_keeps_the_later_ones_on_their_text() {
+        let mut fixture = Fixture::new("ab\ncd\nef");
+        fixture.caret_to(0, 1);
+        fixture.window.add_cursor(Cursor::at(Position::new(2, 1)));
+        fixture.edit().insert_newline(&config());
+        assert_eq!(fixture.text(), "a\nb\ncd\ne\nf");
+        let heads: Vec<Position> = fixture.window.cursors().iter().map(|c| c.head).collect();
+        assert_eq!(heads, vec![Position::new(1, 0), Position::new(4, 0)]);
+
+        fixture.edit().delete_backward(&config());
+        assert_eq!(fixture.text(), "ab\ncd\nef");
+        let heads: Vec<Position> = fixture.window.cursors().iter().map(|c| c.head).collect();
+        assert_eq!(heads, vec![Position::new(0, 1), Position::new(2, 1)]);
     }
 
     #[test]

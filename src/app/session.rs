@@ -49,8 +49,8 @@ enum Layout {
 }
 
 /// Where the session for the working directory lives.
-fn location() -> Option<PathBuf> {
-    if cfg!(test) {
+fn location(app: &App) -> Option<PathBuf> {
+    if app.ephemeral {
         return None;
     }
     let cwd = std::env::current_dir().ok()?;
@@ -67,7 +67,7 @@ fn location() -> Option<PathBuf> {
 /// # Errors
 /// Returns an error if the session file cannot be written.
 pub fn save(app: &App) -> Result<()> {
-    match location() {
+    match location(app) {
         Some(path) => save_to(app, &path),
         None => Ok(()),
     }
@@ -76,7 +76,7 @@ pub fn save(app: &App) -> Result<()> {
 /// Restore the session for the working directory, returning whether there
 /// was one.
 pub fn restore(app: &mut App) -> bool {
-    location().is_some_and(|path| restore_from(app, &path))
+    location(app).is_some_and(|path| restore_from(app, &path))
 }
 
 /// Write `app`'s session to `path`. Nothing is written when no named file is

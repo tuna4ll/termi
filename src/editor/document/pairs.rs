@@ -112,7 +112,12 @@ fn char_at(doc: &Document, pos: Position) -> Option<char> {
 
 /// The character before the caret, or `None` at the start of a line.
 fn char_before(doc: &Document, pos: Position) -> Option<char> {
-    (pos.col > 0).then(|| doc.line(pos.line).char(pos.col - 1))
+    // A caret can briefly sit past the end of its line — another cursor's
+    // edit moved the text under it — so the column is checked, not trusted.
+    pos.col
+        .checked_sub(1)
+        .and_then(|col| doc.line(pos.line).get_char(col))
+        .filter(|ch| *ch != '\n')
 }
 
 #[cfg(test)]

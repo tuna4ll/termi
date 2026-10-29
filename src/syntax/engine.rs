@@ -36,10 +36,11 @@ pub enum BlockState {
 pub struct Highlighter {
     /// The language this highlighter was built from.
     pub language: Language,
-    /// The combined alternation; capture group `n + 1` corresponds to `kinds[n]`.
+    /// The combined alternation, one group around each rule.
     regex: Regex,
-    /// Kind produced by each capture group.
-    kinds: Vec<Rule>,
+    /// What each capture group of `regex` means: `Some` for the group around
+    /// a rule, `None` for group 0 and for any groups a rule has inside it.
+    groups: Vec<Option<Rule>>,
     /// The script's own highlighter, which replaces the regex when present.
     custom: Option<CustomHighlight>,
 }
@@ -135,10 +136,20 @@ impl Highlighter {
             .join("|");
 
         let regex = Regex::new(&source).map_err(|error| format!("{}: {error}", language.origin))?;
+
+        // A rule may have capture groups of its own — users write them, and
+        // nothing forces them not to — so the group numbers are worked out
+        // rather than assumed to run one per rule.
+        let mut groups = vec![None];
+        for (alternative, rule) in alternatives.iter().zip(&kinds) {
+            groups.push(Some(*rule));
+            let inner = Regex::new(alternative).map_or(0, |regex| regex.captures_len() - 1);
+            groups.extend(std::iter::repeat_n(None, inner));
+        }
         Ok(Self {
             language,
             regex,
-            kinds,
+            groups,
             custom,
         })
     }
@@ -180,11 +191,14 @@ impl Highlighter {
                 break;
             };
             let matched = captures.get(0).expect("group 0 always participates");
+            // The rule's own group comes before any group inside it, so the
+            // first participating group that names a rule is the one that
+            // matched.
             let rule = captures
                 .iter()
                 .enumerate()
                 .skip(1)
-                .find_map(|(index, group)| group.map(|_| self.kinds[index - 1]));
+                .find_map(|(index, group)| group.and(self.groups.get(index).copied().flatten()));
 
             match rule {
                 Some(Rule::BlockStart) => {
@@ -509,6 +523,19 @@ mod tests {
         assert_eq!(sketch("diff", "3,4c3,4"), "@@@@@@@");
         assert_eq!(sketch("diff", "< was"), "-----");
         assert_eq!(sketch("diff", "> now"), "+++++");
+    }
+
+    #[test]
+    fn a_rule_with_groups_of_its_own_does_not_shift_the_others() {
+        let script = crate::syntax::script::load(
+            r#"return { name = "groups", keywords = { "if" },
+               rules = { { "(a)(b)", "string" } } }"#,
+            "groups.lua",
+        )
+        .expect("valid script");
+        let highlighter = Highlighter::new(script).expect("compiles");
+        let (spans, _) = highlighter.highlight_line("ab if", BlockState::Normal);
+        assert_eq!(paint("ab if", &spans), "ss.kk");
     }
 
     #[test]

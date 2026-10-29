@@ -13,7 +13,7 @@ repository = "https://github.com/tuna4ll/termi"
 keywords = ["editor", "terminal", "tui", "text-editor", "modal"]
 categories = ["command-line-utilities", "text-editors"]
 # CI configuration is noise inside a published crate.
-exclude = [".github/", ".gitattributes"]
+exclude = [".github/", ".gitattributes", "fuzz/"]
 
 [dependencies]
 # TUI rendering + terminal backend. `crossterm_0_29` pins ratatui's backend to the
@@ -64,6 +64,10 @@ similar = "3"
 
 anyhow = "1"
 
+[[bench]]
+name = "core"
+harness = false
+
 [lints.rust]
 unsafe_code = "forbid"
 
@@ -71,3 +75,6 @@ unsafe_code = "forbid"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
+
+[dev-dependencies]
+proptest = "1"

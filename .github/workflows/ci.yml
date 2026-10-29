@@ -33,6 +33,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --all-targets -- -D warnings
+      # Benchmarks are not run here — shared runners are too noisy for the
+      # numbers to mean anything — but they have to keep compiling.
+      - run: cargo bench --no-run
+
+  fuzz:
+    name: fuzz targets build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      # Fuzzing itself needs nightly and hours; checking that the targets
+      # still build against the library is what keeps them usable.
+      - run: cargo check --manifest-path fuzz/Cargo.toml
 
   test:
     name: test (${{ matrix.os }})
