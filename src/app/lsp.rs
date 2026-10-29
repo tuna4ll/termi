@@ -78,6 +78,25 @@ pub enum MenuAction {
     Close,
 }
 
+/// The same path as the open buffer showing it, if one is.
+///
+/// Servers answer with the canonical path — `/private/var/…` for macOS's
+/// `/var/…`, symlinks resolved — while a buffer keeps the path it was opened
+/// by, so a plain comparison would miss and open the file a second time.
+fn local_path(app: &App, path: PathBuf) -> PathBuf {
+    if app.index_of(&path).is_some() {
+        return path;
+    }
+    let Ok(canonical) = path.canonicalize() else {
+        return path;
+    };
+    app.buffers
+        .iter()
+        .filter_map(|buffer| buffer.document.path())
+        .find(|open| open.canonicalize().is_ok_and(|other| other == canonical))
+        .map_or(path, Path::to_path_buf)
+}
+
 /// The server a language should use: the config's, or the usual one.
 fn server_for(app: &App, language: &str) -> Option<ServerConfig> {
     app.config
@@ -212,6 +231,7 @@ pub fn poll(app: &mut App) {
 fn handle(app: &mut App, language: &str, encoding: Encoding, event: Event) {
     match event {
         Event::Diagnostics { path, items } => {
+            let path = local_path(app, path);
             let document = app
                 .index_of(&path)
                 .map(|index| &app.buffers[index].document);
@@ -399,7 +419,13 @@ fn format_with(app: &mut App, command: &str) {
 
 /// Go to one location, or offer a list of several.
 fn show_locations(app: &mut App, result: &Value, encoding: Encoding, title: &str) {
-    let locations = protocol::read_locations(result);
+    let locations: Vec<protocol::Location> = protocol::read_locations(result)
+        .into_iter()
+        .map(|location| protocol::Location {
+            path: local_path(app, location.path),
+            start: location.start,
+        })
+        .collect();
     let resolve = |app: &App, location: &protocol::Location| {
         let document = app
             .index_of(&location.path)
@@ -495,6 +521,7 @@ fn apply_workspace_edit(app: &mut App, result: &Value, encoding: Encoding) {
     }
     let mut changed = 0;
     for (path, edits) in files {
+        let path = local_path(app, path);
         match app.load(path) {
             Ok(index) => {
                 apply_edits(app, index, &edits, encoding);
@@ -774,6 +801,8 @@ mod tests {
 
     /// An editor with `text` in a Rust file and the mock server attached.
     fn editor(name: &str, text: &str) -> (App, PathBuf) {
+        // A temporary directory is behind a symlink on macOS, which is exactly
+        // the case servers answer with a different spelling of the path for.
         let root = std::env::temp_dir().join(format!("termi-lsp-{name}"));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).expect("create fixture");
@@ -792,9 +821,10 @@ mod tests {
         (app, path)
     }
 
-    /// Poll until `done` holds, for up to two seconds.
+    /// Poll until `done` holds, for up to ten seconds — shared CI machines
+    /// can be slow to schedule the server's thread.
     fn wait(app: &mut App, done: impl Fn(&App) -> bool) {
-        for _ in 0..400 {
+        for _ in 0..2000 {
             sync(app);
             poll(app);
             if done(app) {
@@ -893,6 +923,30 @@ mod tests {
         });
         app.edit().undo();
         assert_eq!(app.buffer().document.line_string(0), "new = 1");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn answers_about_a_file_opened_through_a_symlink_reach_its_buffer() {
+        let real = std::env::temp_dir().join("termi-lsp-symlink-real");
+        let link = std::env::temp_dir().join("termi-lsp-symlink-link");
+        let _ = std::fs::remove_dir_all(&real);
+        let _ = std::fs::remove_file(&link);
+        std::fs::create_dir_all(&real).expect("create fixture");
+        std::fs::write(real.join("main.rs"), "bad code\n").expect("write fixture");
+        std::os::unix::fs::symlink(&real, &link).expect("symlink");
+        let path = link.join("main.rs");
+
+        let mut app = App::with_config(Config::default());
+        app.buffers[0] = Buffer::new(Document::open(path.clone()).expect("open"));
+        app.windows.focused_mut().reset(0);
+        app.lsp.clients.insert(
+            "rust".to_string(),
+            Client::over(crate::lsp::mock::server(), "mock", &link),
+        );
+        attach(&mut app, 0);
+        wait(&mut app, |app| app.lsp.diagnostics.contains_key(&path));
+        assert_eq!(diagnostics_here(&app).len(), 1);
     }
 
     #[test]

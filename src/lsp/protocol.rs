@@ -72,7 +72,13 @@ pub fn uri(path: &Path) -> String {
             .map(|cwd| cwd.join(path))
             .unwrap_or_else(|_| path.to_path_buf())
     });
-    let text = absolute.to_string_lossy().replace('\\', "/");
+    // Windows hands canonical paths back in the `\\?\` form, which is not a
+    // path any server expects in a URI.
+    let text = absolute.to_string_lossy();
+    let text = text
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&text)
+        .replace('\\', "/");
     let mut encoded = String::from("file://");
     if !text.starts_with('/') {
         encoded.push('/');
@@ -107,9 +113,13 @@ pub fn path_of(uri: &str) -> Option<PathBuf> {
         index += 1;
     }
     let text = String::from_utf8(bytes).ok()?;
-    // `file:///C:/x` on Windows has a slash before the drive letter.
-    let text = if cfg!(windows) {
-        text.trim_start_matches('/').to_string()
+    // `file:///C:/x` on Windows has a slash before the drive letter; a path
+    // without one keeps its slash.
+    let bytes = text.as_bytes();
+    let drive =
+        bytes.len() >= 3 && bytes[0] == b'/' && bytes[1].is_ascii_alphabetic() && bytes[2] == b':';
+    let text = if cfg!(windows) && drive {
+        text[1..].to_string()
     } else {
         text
     };
@@ -492,6 +502,10 @@ mod tests {
         assert!(uri.starts_with("file://"));
         assert!(uri.contains("%20"));
         assert_eq!(path_of(&uri), Some(path));
+        assert_eq!(
+            path_of("file:///tmp/a.rs"),
+            Some(PathBuf::from("/tmp/a.rs"))
+        );
     }
 
     #[test]
