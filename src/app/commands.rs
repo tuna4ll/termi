@@ -60,6 +60,9 @@ COMMANDS  :w [path]  :q[!]  :wq  :wa  :qa[!]  :wqa  :e[!] path
           :[range]s/a/b/[gciI]   ranges: 5,9  .,+3  %  '<,'>  'a,$
           :grep [text]  (Ctrl+G)   :greplace/a/b/   :help [topic]
 GIT       ]c [c next/previous change    :blame who changed this line
+LSP       K hover   gd definition   gr references   ]d [d diagnostics
+          Ctrl+Space complete (Tab/Enter accept)   F2 or :rename <name>
+          :format   :diagnostics   :lsp [restart]
           :%s/pattern/replacement/g";
 
 /// The section headings of the help text, for `:help <Tab>`.
@@ -151,6 +154,11 @@ fn execute(app: &mut App, command: Command) {
         Command::Edit { path, force } => edit(app, path, force),
         Command::CreateFile(path) => create_path(app, path, false),
         Command::CreateDirectory(path) => create_path(app, path, true),
+        // Without a tree entry waiting to be renamed, `:rename` renames the
+        // symbol under the caret.
+        Command::Rename(path) if app.tree_source.is_none() => {
+            super::lsp::rename(app, &path.to_string_lossy());
+        }
         Command::Rename(path) => move_tree_path(app, path, "renamed"),
         Command::Copy(path) => copy_tree_path(app, path),
         Command::Move(path) => move_tree_path(app, path, "moved"),
@@ -206,6 +214,10 @@ fn execute(app: &mut App, command: Command) {
             case_sensitive,
         } => super::substitute::project_replace(app, &pattern, &replacement, case_sensitive),
         Command::Grep(pattern) => app.open_grep(pattern.as_deref()),
+        Command::Format => super::lsp::format(app),
+        Command::Diagnostics => super::lsp::list_diagnostics(app),
+        Command::Lsp { restart: false } => super::lsp::describe(app),
+        Command::Lsp { restart: true } => super::lsp::restart(app),
         Command::Blame => {
             let line = app.window().cursor().head.line;
             match app
@@ -347,6 +359,8 @@ pub(super) fn write(app: &mut App, path: Option<PathBuf>, force: bool) {
                 if app.config.git {
                     app.buffer_mut().refresh_git();
                 }
+                let index = app.window().buffer;
+                super::lsp::attach(app, index);
             }
             let name = app.buffer().document.display_name().to_string();
             let lines = app.buffer().document.len_lines();

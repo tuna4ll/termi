@@ -135,6 +135,8 @@ pub struct App {
     pub history_cursor: Option<usize>,
     /// What was typed before Up began travelling through the history.
     pub history_draft: String,
+    /// Language servers and what they have said.
+    pub lsp: super::lsp::LspState,
     /// Incremental search state, kept across searches so `n` can repeat one.
     pub search: Search,
     /// File browser, built on first use and kept afterwards so the expanded
@@ -277,6 +279,7 @@ impl App {
             history: super::complete::History::default(),
             history_cursor: None,
             history_draft: String::new(),
+            lsp: super::lsp::LspState::default(),
             search: Search::default(),
             tree: None,
             tree_selected: 0,
@@ -549,15 +552,18 @@ impl App {
 
         // The initial scratch buffer is a placeholder, not a document the user
         // asked for; replace it rather than accumulating an empty tab.
-        if self.buffers.len() == 1 && self.is_scratch(0) {
+        let index = if self.buffers.len() == 1 && self.is_scratch(0) {
             self.buffers[0] = buffer;
             for (_, window) in self.windows.iter_mut() {
                 window.reset(0);
             }
-            return Ok(0);
-        }
-        self.buffers.push(buffer);
-        Ok(self.buffers.len() - 1)
+            0
+        } else {
+            self.buffers.push(buffer);
+            self.buffers.len() - 1
+        };
+        super::lsp::attach(self, index);
+        Ok(index)
     }
 
     /// Settle a freshly opened buffer's own settings: what `.editorconfig`
@@ -831,6 +837,7 @@ impl App {
     }
 
     fn close_buffer(&mut self, index: BufferId) {
+        super::lsp::detach(self, index);
         if let (Some(directory), Some((_, path))) = (self.swap_dir(), &self.buffers[index].swap) {
             crate::filesystem::swap::remove(&directory, path);
         }

@@ -74,6 +74,14 @@ pub struct Theme {
     pub git_modified: Style,
     /// The sign where lines were removed.
     pub git_removed: Style,
+    /// Errors from a language server: the sign, and the underline colour.
+    pub diagnostic_error: Style,
+    /// Warnings.
+    pub diagnostic_warning: Style,
+    /// Information.
+    pub diagnostic_info: Style,
+    /// Hints.
+    pub diagnostic_hint: Style,
     /// Token styles.
     pub syntax: SyntaxStyles,
 }
@@ -160,6 +168,18 @@ impl Default for Theme {
 }
 
 impl Theme {
+    /// The style for a diagnostic of `severity`.
+    #[must_use]
+    pub const fn diagnostic(&self, severity: crate::lsp::protocol::Severity) -> Style {
+        use crate::lsp::protocol::Severity;
+        match severity {
+            Severity::Error => self.diagnostic_error,
+            Severity::Warning => self.diagnostic_warning,
+            Severity::Information => self.diagnostic_info,
+            Severity::Hint => self.diagnostic_hint,
+        }
+    }
+
     /// Let the terminal's own background show through: every slot that only
     /// paints the editor's backdrop gives up its background colour.
     ///

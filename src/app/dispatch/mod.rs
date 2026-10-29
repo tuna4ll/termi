@@ -236,6 +236,24 @@ fn execute(app: &mut App, action: Action) -> Result<()> {
         Action::ScrollCaret(row) => motion::scroll_caret(app, row),
         Action::Fold(command) => motion::fold(app, command),
         Action::JumpHunk { forward } => jump_hunk(app, forward),
+        Action::Lsp(request) => {
+            use crate::input::LspAction;
+            use crate::lsp::RequestKind;
+            match request {
+                LspAction::Hover => crate::app::lsp::request(app, RequestKind::Hover),
+                LspAction::Definition => crate::app::lsp::request(app, RequestKind::Definition),
+                LspAction::References => crate::app::lsp::request(app, RequestKind::References),
+                LspAction::Complete => crate::app::lsp::request(app, RequestKind::Completion),
+                LspAction::NextDiagnostic => crate::app::lsp::jump_diagnostic(app, true),
+                LspAction::PreviousDiagnostic => crate::app::lsp::jump_diagnostic(app, false),
+            }
+        }
+        Action::Menu(action) => crate::app::lsp::menu_action(app, action),
+        Action::RenamePrompt => {
+            let word = operator::word_under_caret(app).unwrap_or_default();
+            enter_mode(app, Mode::Command);
+            app.command_line = format!("rename {word}");
+        }
         Action::Reselect => reselect(app),
         Action::JumpBack => motion::jump(app, true),
         Action::JumpForward => motion::jump(app, false),
@@ -272,6 +290,9 @@ fn execute(app: &mut App, action: Action) -> Result<()> {
             let (mut edit, config) = app.edit_and_config();
             if !edit.delete_selections() {
                 edit.delete_backward(&config);
+            }
+            if app.mode.is_insert() {
+                crate::app::lsp::after_typing(app, None);
             }
         }
         Action::DeleteForward => {
@@ -529,6 +550,9 @@ fn insert_char(app: &mut App, ch: char) {
         edit.delete_backward(&config);
     }
     edit.insert_char(ch, &config);
+    if app.mode.is_insert() {
+        crate::app::lsp::after_typing(app, Some(ch));
+    }
 }
 
 const MATCH_COUNT_CAP: usize = 10_000;
@@ -804,6 +828,9 @@ fn enter_mode(app: &mut App, mode: Mode) {
     let leaving = app.mode;
     if leaving.is_visual() {
         remember_visual(app, leaving);
+    }
+    if leaving == Mode::Insert {
+        app.lsp.menu = None;
     }
     if leaving == Mode::Insert && app.insert_group_open {
         app.edit().end_group();

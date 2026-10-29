@@ -23,7 +23,8 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 use super::{
-    Action, CaseChange, FindSpec, FoldCommand, Goal, Operator, ScreenRow, Target, is_plain,
+    Action, CaseChange, FindSpec, FoldCommand, Goal, LspAction, Operator, ScreenRow, Target,
+    is_plain,
 };
 use crate::app::mode::Mode;
 use crate::editor::cursor::Motion;
@@ -331,6 +332,7 @@ impl Parser<'_> {
             'z' => self.z_command()?,
             'g' => self.g_command(count)?,
             '[' | ']' => self.bracket_command(key == ']')?,
+            'K' => Action::Lsp(LspAction::Hover),
             _ => return Err(Stop::Invalid),
         })
     }
@@ -339,6 +341,8 @@ impl Parser<'_> {
     fn bracket_command(&mut self, forward: bool) -> Step<Action> {
         Ok(match self.char()? {
             'c' => Action::JumpHunk { forward },
+            'd' if forward => Action::Lsp(LspAction::NextDiagnostic),
+            'd' => Action::Lsp(LspAction::PreviousDiagnostic),
             _ => return Err(Stop::Invalid),
         })
     }
@@ -386,6 +390,8 @@ impl Parser<'_> {
             },
             't' => Action::CycleBuffer { forward: true },
             'T' => Action::CycleBuffer { forward: false },
+            'd' => Action::Lsp(LspAction::Definition),
+            'r' => Action::Lsp(LspAction::References),
             'p' => Action::Put {
                 before: false,
                 count: n,

@@ -10,6 +10,7 @@
 //! **Public API:** the widget types re-exported below.
 
 pub mod command_bar;
+pub mod completion_menu;
 pub mod editor_view;
 pub mod file_tree;
 pub mod minimap;
@@ -21,6 +22,7 @@ pub mod tabs;
 pub mod terminal_view;
 
 pub use command_bar::CommandBar;
+pub use completion_menu::CompletionMenuView;
 pub use editor_view::EditorView;
 pub use file_tree::FileTree;
 pub use minimap::Minimap;

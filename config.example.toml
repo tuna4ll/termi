@@ -28,6 +28,12 @@ relative_line_numbers = false
 sign_column = true       # a column for git and diagnostic signs
 git = true               # mark lines changed since the last commit, show the branch
 
+# Language servers start on their own for the languages they serve, when the
+# program is installed: rust-analyzer, clangd, pylsp, gopls,
+# typescript-language-server, zls, lua-language-server and others.
+lsp = true
+auto_complete = true     # offer completions while typing, not only on Ctrl+Space
+
 # Text area.
 word_wrap = false        # wrap long lines instead of scrolling sideways
 show_whitespace = false  # draw tabs and trailing spaces as visible marks
@@ -84,6 +90,8 @@ mouse = true
 # [languages.python]
 # tab_width = 4
 # trim_trailing_whitespace = true
+# language_server = { command = "pyright-langserver", args = ["--stdio"] }
+# formatter = "black --quiet -"   # :format pipes the file through this
 #
 # [languages.go]
 # expand_tabs = false

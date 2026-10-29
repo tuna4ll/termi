@@ -41,6 +41,8 @@ pub struct StatusBar<'a> {
     pub readonly: bool,
     /// The git branch the file is on.
     pub branch: Option<&'a str>,
+    /// Errors and warnings the language server reported for the file.
+    pub problems: (usize, usize),
     /// Number of active cursors; shown only when greater than one.
     pub cursor_count: usize,
     /// Characters covered by the selection; shown only when there is one.
@@ -84,6 +86,19 @@ impl Widget for StatusBar<'_> {
             left.push(Span::styled(
                 format!("  {} selected", self.selected),
                 self.theme.status,
+            ));
+        }
+        let (errors, warnings) = self.problems;
+        if errors > 0 {
+            left.push(Span::styled(
+                format!("  ✖ {errors}"),
+                self.theme.status.patch(self.theme.diagnostic_error),
+            ));
+        }
+        if warnings > 0 {
+            left.push(Span::styled(
+                format!("  ⚠ {warnings}"),
+                self.theme.status.patch(self.theme.diagnostic_warning),
             ));
         }
         if let Some(register) = self.recording {

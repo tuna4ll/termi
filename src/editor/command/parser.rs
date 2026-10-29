@@ -141,6 +141,13 @@ pub fn parse(input: &str) -> Result<Command, String> {
         "help" | "h" => Ok(Command::HelpTopic(rest.to_string())),
         "grep" | "rg" => Ok(Command::Grep(argument)),
         "blame" => Ok(Command::Blame),
+        "format" | "fmt" => Ok(Command::Format),
+        "diagnostics" | "diag" => Ok(Command::Diagnostics),
+        "lsp" => match rest {
+            "" => Ok(Command::Lsp { restart: false }),
+            "restart" => Ok(Command::Lsp { restart: true }),
+            _ => Err("usage: :lsp [restart]".to_string()),
+        },
         "find" | "files" => Ok(Command::Find),
         "buffers" | "ls" => Ok(Command::Buffers),
         "commands" => Ok(Command::Commands),

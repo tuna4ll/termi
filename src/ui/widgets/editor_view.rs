@@ -286,6 +286,16 @@ impl Marks {
     }
 }
 
+/// Underline a character in a diagnostic's colour, keeping its own colour —
+/// the syntax still reads, and the squiggle says what is wrong.
+fn underline_with(style: Style, diagnostic: Style) -> Style {
+    let style = style.add_modifier(ratatui::style::Modifier::UNDERLINED);
+    match diagnostic.fg {
+        Some(color) => style.underline_color(color),
+        None => style,
+    }
+}
+
 /// One screen row's slice of a document line.
 ///
 /// Grouped into a struct because the row, the line and the cell range always
@@ -326,6 +336,8 @@ pub struct EditorView<'a> {
     pub folds: &'a [(usize, usize)],
     /// How each line differs from the last commit, indexed by line.
     pub signs: &'a [Option<crate::git::Sign>],
+    /// What the language server said about the file, in document order.
+    pub diagnostics: &'a [crate::lsp::protocol::Diagnostic],
 }
 
 impl EditorView<'_> {
@@ -432,6 +444,21 @@ impl EditorView<'_> {
     /// commit.
     fn render_sign(&self, surface: &mut Surface, x: u16, y: u16, line: usize) {
         use crate::git::Sign;
+        // A diagnostic matters more than a git change, and the worst one on the
+        // line is the one shown.
+        let worst = self
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.start.line == line)
+            .map(|diagnostic| diagnostic.severity)
+            .min();
+        if let Some(severity) = worst {
+            if let Some(cell) = surface.cell_mut((x, y)) {
+                cell.set_char('●')
+                    .set_style(self.theme.gutter.patch(self.theme.diagnostic(severity)));
+            }
+            return;
+        }
         let (glyph, style) = match self.signs.get(line).copied().flatten() {
             Some(Sign::Added) => ('▎', self.theme.git_added),
             Some(Sign::Modified) => ('▎', self.theme.git_modified),
@@ -485,6 +512,7 @@ impl EditorView<'_> {
         } else {
             Vec::new()
         };
+        let underlines = self.underlines(line);
 
         for column in 0..width {
             let Some(cell) = surface.cell_mut((x0 + column, y)) else {
@@ -495,13 +523,19 @@ impl EditorView<'_> {
             // padding, not the next chunk's text.
             match display.cells.get(index).filter(|_| index < last_cell) {
                 Some(display_cell) => {
-                    let style = self.style_for(
+                    let mut style = self.style_for(
                         base,
                         line_start,
                         display_cell.char_index,
                         &matches,
                         &syntax,
                     );
+                    if let Some(underline) = underlines
+                        .iter()
+                        .find(|(from, to, _)| (*from..*to).contains(&display_cell.char_index))
+                    {
+                        style = underline_with(style, underline.2);
+                    }
                     let first_of_char = index == 0
                         || display
                             .cells
@@ -538,6 +572,31 @@ impl EditorView<'_> {
                 }
             }
         }
+    }
+
+    /// The spans of `line` diagnostics cover, as character columns, with the
+    /// style that says how serious each is. A diagnostic with an empty span
+    /// still marks one character, so it can be seen.
+    fn underlines(&self, line: usize) -> Vec<(usize, usize, Style)> {
+        let length = self.buffer.document.line_len(line);
+        self.diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.start.line <= line && diagnostic.end.line >= line)
+            .map(|diagnostic| {
+                let from = if diagnostic.start.line == line {
+                    diagnostic.start.col
+                } else {
+                    0
+                };
+                let to = if diagnostic.end.line == line {
+                    diagnostic.end.col
+                } else {
+                    length
+                };
+                let to = if to <= from { from + 1 } else { to };
+                (from, to, self.theme.diagnostic(diagnostic.severity))
+            })
+            .collect()
     }
 
     /// Layer the styles that can apply to one character.

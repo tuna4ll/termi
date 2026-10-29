@@ -92,6 +92,11 @@ pub struct LanguageConfig {
     pub trim_trailing_whitespace: Option<bool>,
     /// End the file with a line break on save.
     pub insert_final_newline: Option<bool>,
+    /// The language server to start, instead of the usual one.
+    pub language_server: Option<crate::lsp::ServerConfig>,
+    /// A command that reads the file on standard input and writes it back
+    /// formatted, for `:format` when there is no language server to ask.
+    pub formatter: Option<String>,
 }
 
 impl LanguageConfig {
@@ -192,6 +197,10 @@ pub struct Config {
     pub sign_column: bool,
     /// Mark lines changed since the last commit, and show the branch.
     pub git: bool,
+    /// Start language servers for the files opened.
+    pub lsp: bool,
+    /// Offer completions as an identifier is typed, not only on Ctrl+Space.
+    pub auto_complete: bool,
     /// Reopen the files, windows and places of the last session in this
     /// directory when started without files.
     pub restore_session: bool,
@@ -234,6 +243,8 @@ impl Default for Config {
             minimap: false,
             sign_column: true,
             git: true,
+            lsp: true,
+            auto_complete: true,
             restore_session: true,
             keys: KeyTables::default(),
             languages: HashMap::new(),
@@ -319,7 +330,7 @@ mod tests {
     #[test]
     fn key_tables_and_language_sections() {
         let config = Config::parse(
-            "[keys.normal]\n\"<Space>w\" = \":w\"\n[keys.insert]\njk = \"normal_mode\"\n\n[languages.python]\ntab_width = 2\n",
+            "[keys.normal]\n\"<Space>w\" = \":w\"\n[keys.insert]\njk = \"normal_mode\"\n\n[languages.python]\ntab_width = 2\nlanguage_server = { command = \"pyright-langserver\", args = [\"--stdio\"] }\n",
         )
         .expect("valid config");
         assert_eq!(
@@ -331,6 +342,13 @@ mod tests {
             Some("normal_mode")
         );
         assert_eq!(config.languages["python"].tab_width, Some(2));
+        assert_eq!(
+            config.languages["python"]
+                .language_server
+                .as_ref()
+                .map(|server| server.command.as_str()),
+            Some("pyright-langserver")
+        );
         assert!(Config::parse("[languages.python]\ntabwidth = 2").is_err());
     }
 

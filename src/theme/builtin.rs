@@ -73,6 +73,10 @@ pub fn dark() -> Theme {
         git_added: Style::new().fg(Color::Rgb(0x7f, 0xb9, 0x6e)),
         git_modified: Style::new().fg(Color::Rgb(0xd7, 0xba, 0x7d)),
         git_removed: Style::new().fg(Color::Rgb(0xe5, 0x5f, 0x5f)),
+        diagnostic_error: Style::new().fg(Color::Rgb(0xe5, 0x5f, 0x5f)),
+        diagnostic_warning: Style::new().fg(Color::Rgb(0xd7, 0xba, 0x7d)),
+        diagnostic_info: Style::new().fg(Color::Rgb(0x56, 0x9c, 0xd6)),
+        diagnostic_hint: Style::new().fg(Color::Rgb(0x5c, 0x66, 0x70)),
         syntax: SyntaxStyles {
             keyword: Style::new().fg(Color::Rgb(0xc5, 0x86, 0xc0)),
             type_name: Style::new().fg(Color::Rgb(0x4e, 0xc9, 0xb0)),
@@ -159,6 +163,10 @@ pub fn light() -> Theme {
         git_added: Style::new().fg(Color::Rgb(0x2e, 0x7d, 0x32)),
         git_modified: Style::new().fg(Color::Rgb(0xa6, 0x6a, 0x00)),
         git_removed: Style::new().fg(Color::Rgb(0xc0, 0x2c, 0x2c)),
+        diagnostic_error: Style::new().fg(Color::Rgb(0xc0, 0x2c, 0x2c)),
+        diagnostic_warning: Style::new().fg(Color::Rgb(0xa6, 0x6a, 0x00)),
+        diagnostic_info: Style::new().fg(Color::Rgb(0x1e, 0x63, 0xa8)),
+        diagnostic_hint: Style::new().fg(Color::Rgb(0x8a, 0x92, 0x99)),
         syntax: SyntaxStyles {
             keyword: Style::new().fg(Color::Rgb(0x8b, 0x2c, 0x9e)),
             type_name: Style::new().fg(Color::Rgb(0x0f, 0x6b, 0x63)),

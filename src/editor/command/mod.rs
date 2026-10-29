@@ -153,6 +153,12 @@ pub enum Command {
     Later(usize),
     /// `:blame` — who last changed the caret's line.
     Blame,
+    /// `:format` — format the file with its language server or formatter.
+    Format,
+    /// `:diagnostics` — list the file's diagnostics.
+    Diagnostics,
+    /// `:lsp` — show the language servers; `:lsp restart` restarts them.
+    Lsp { restart: bool },
     /// `:help` — open the key and command reference.
     Help,
     /// `:find` — search project files.

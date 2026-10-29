@@ -166,9 +166,30 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(search_box, regions.command);
         Some(caret)
     } else {
+        // With nothing else to say, the bottom line reads out the diagnostic
+        // on the caret's line, so it can be seen without hunting for it.
+        let diagnostic;
+        let status = if app.status.text.is_empty() && app.mode == crate::app::mode::Mode::Normal {
+            let line = app.window().cursor().head.line;
+            diagnostic = crate::app::lsp::diagnostics_here(app)
+                .iter()
+                .filter(|found| found.start.line == line)
+                .min_by_key(|found| found.severity)
+                .map(|found| crate::app::state::Status {
+                    text: format!(
+                        "{}: {}",
+                        found.source.as_deref().unwrap_or("lsp"),
+                        found.message.lines().next().unwrap_or_default()
+                    ),
+                    is_error: found.severity == crate::lsp::protocol::Severity::Error,
+                });
+            diagnostic.as_ref().unwrap_or(&app.status)
+        } else {
+            &app.status
+        };
         let command_bar = CommandBar {
             command: app.mode.is_command().then_some(app.command_line.as_str()),
-            status: &app.status,
+            status,
             theme: &app.theme,
         };
         let caret = command_bar.caret_position(regions.command);
@@ -204,6 +225,19 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         frame.render_widget(view, frame.area());
         frame.set_cursor_position(caret);
         return;
+    }
+
+    if let (Some(menu), Some(caret)) = (app.lsp.menu.as_ref(), editor_caret)
+        && app.mode.is_insert()
+    {
+        frame.render_widget(
+            crate::ui::widgets::CompletionMenuView {
+                menu,
+                caret,
+                theme: &app.theme,
+            },
+            frame.area(),
+        );
     }
 
     if let Some(position) = prompt_caret.or(editor_caret) {
@@ -373,6 +407,11 @@ fn draw_windows(frame: &mut Frame, app: &App, panes: &Panes) -> Option<(u16, u16
             brackets,
             folds: &folds,
             signs: &buffer.git.signs,
+            diagnostics: buffer
+                .document
+                .path()
+                .and_then(|path| app.lsp.diagnostics.get(path))
+                .map_or(&[], Vec::as_slice),
         };
         if focused {
             caret = view.caret_position(*rect);
@@ -499,6 +538,16 @@ fn status_bar(app: &App) -> StatusBar<'_> {
             .map(crate::filesystem::Encoding::label),
         readonly: buffer.document.is_readonly(),
         branch: buffer.git.branch.as_deref(),
+        problems: {
+            use crate::lsp::protocol::Severity;
+            let list = crate::app::lsp::diagnostics_here(app);
+            let count = |severity| {
+                list.iter()
+                    .filter(|found| found.severity == severity)
+                    .count()
+            };
+            (count(Severity::Error), count(Severity::Warning))
+        },
         cursor_count: window.cursors().len(),
         selected: selection_ranges(app)
             .iter()
@@ -613,6 +662,67 @@ mod tests {
         assert!(row(&surface, 1).starts_with("▎new"), "{}", row(&surface, 1));
         assert!(
             row(&surface, 2).starts_with("▎changed"),
+            "{}",
+            row(&surface, 2)
+        );
+    }
+
+    #[test]
+    fn diagnostics_mark_the_gutter_underline_and_bottom_line() {
+        use crate::lsp::protocol::{Diagnostic, Severity};
+        let path = std::path::PathBuf::from("/nowhere/main.rs");
+        let mut app = app("");
+        app.buffers[0] = TextBuffer::new(Document::from_text("let x = oops;", Some(path.clone())));
+        app.windows.focused_mut().reset(0);
+        app.config.sign_column = true;
+        app.lsp.diagnostics.insert(
+            path,
+            vec![Diagnostic {
+                start: crate::editor::cursor::Position::new(0, 8),
+                end: crate::editor::cursor::Position::new(0, 12),
+                severity: Severity::Error,
+                message: "cannot find value `oops`".into(),
+                source: Some("rustc".into()),
+            }],
+        );
+        let surface = render(&mut app, 70, 6);
+        assert!(row(&surface, 0).starts_with('●'), "{}", row(&surface, 0));
+        let underlined = surface
+            .cell((9, 0))
+            .is_some_and(|cell| cell.modifier.contains(ratatui::style::Modifier::UNDERLINED));
+        assert!(underlined, "the span is underlined");
+        assert!(
+            row(&surface, 5).contains("rustc: cannot find value"),
+            "{}",
+            row(&surface, 5)
+        );
+        assert!(row(&surface, 4).contains("✖ 1"), "{}", row(&surface, 4));
+    }
+
+    #[test]
+    fn the_completion_menu_opens_under_the_caret() {
+        use crate::app::lsp::CompletionMenu;
+        use crate::lsp::protocol::CompletionItem;
+        let mut app = app("al");
+        app.mode = crate::app::mode::Mode::Insert;
+        let item = |label: &str| CompletionItem {
+            label: label.into(),
+            detail: String::new(),
+            insert: label.into(),
+            replace_from: None,
+            filter: label.into(),
+        };
+        app.lsp.menu = Some(CompletionMenu {
+            items: vec![item("alpha"), item("alphabet")],
+            shown: vec![0, 1],
+            selected: 1,
+            line: 0,
+            start: 0,
+        });
+        let surface = render(&mut app, 30, 8);
+        assert!(row(&surface, 1).contains("alpha"), "{}", row(&surface, 1));
+        assert!(
+            row(&surface, 2).contains("alphabet"),
             "{}",
             row(&surface, 2)
         );

@@ -157,6 +157,23 @@ pub enum FoldCommand {
     CloseAll,
 }
 
+/// A question for the language server, or a step through its answers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LspAction {
+    /// `K` — what is under the caret.
+    Hover,
+    /// `gd` — where it is defined.
+    Definition,
+    /// `gr` — where it is used.
+    References,
+    /// Ctrl+Space — what could go here.
+    Complete,
+    /// `]d`.
+    NextDiagnostic,
+    /// `[d`.
+    PreviousDiagnostic,
+}
+
 /// A row of the window, for `H`, `M`, `L` and `zt`, `zz`, `zb`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScreenRow {
@@ -277,6 +294,9 @@ pub enum Action {
     JumpHunk {
         forward: bool,
     },
+    Lsp(LspAction),
+    Menu(crate::app::lsp::MenuAction),
+    RenamePrompt,
     Reselect,
     JumpBack,
     JumpForward,
@@ -415,6 +435,9 @@ pub struct Input {
     last_find: Option<FindSpec>,
     /// Whether a macro is being recorded; set by the event loop.
     pub recording: bool,
+    /// Whether a completion menu is open, which gives the arrows, Tab, Enter
+    /// and Escape to the menu; set by the event loop.
+    pub menu_open: bool,
 }
 
 impl Input {
@@ -506,6 +529,9 @@ impl Input {
             Mode::Normal => self.sequence(key, mode, keymap::normal, grammar::normal),
             Mode::Visual | Mode::VisualLine | Mode::VisualBlock => {
                 self.sequence(key, mode, keymap::visual, grammar::visual)
+            }
+            Mode::Insert if self.menu_open => {
+                keymap::menu(key).unwrap_or_else(|| keymap::insert(key))
             }
             Mode::Insert => keymap::insert(key),
             Mode::Command => keymap::command(key),

@@ -2,7 +2,8 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 
-use super::{Action, Operator, Pending, is_ctrl, is_plain};
+use super::{Action, LspAction, Operator, Pending, is_ctrl, is_plain};
+use crate::app::lsp::MenuAction;
 use crate::app::mode::Mode;
 use crate::editor::cursor::Motion;
 use crate::editor::window::{Axis, Side};
@@ -118,6 +119,7 @@ pub fn normal(key: KeyEvent, pending: &mut Option<Pending>) -> Option<Action> {
     }
     Some(match key.code {
         KeyCode::Esc => Action::ClearCursors,
+        KeyCode::F(2) => Action::RenamePrompt,
         KeyCode::Backspace => Action::DeleteBackward,
         KeyCode::Delete => Action::DeleteForward,
         KeyCode::PageDown => Action::Page {
@@ -219,7 +221,26 @@ pub fn mouse(event: MouseEvent) -> Action {
     }
 }
 
+/// The keys an open completion menu takes for itself; `None` lets the key
+/// through to insert mode.
+pub fn menu(key: KeyEvent) -> Option<Action> {
+    let ctrl = is_ctrl(key.modifiers);
+    Some(Action::Menu(match key.code {
+        KeyCode::Down | KeyCode::Tab => MenuAction::Next,
+        KeyCode::Char('n') if ctrl => MenuAction::Next,
+        KeyCode::Up | KeyCode::BackTab => MenuAction::Previous,
+        KeyCode::Char('p') if ctrl => MenuAction::Previous,
+        KeyCode::Enter => MenuAction::Accept,
+        KeyCode::Char('y') if ctrl => MenuAction::Accept,
+        KeyCode::Esc => MenuAction::Close,
+        _ => return None,
+    }))
+}
+
 pub fn insert(key: KeyEvent) -> Action {
+    if is_ctrl(key.modifiers) && key.code == KeyCode::Char(' ') {
+        return Action::Lsp(LspAction::Complete);
+    }
     if let Some(action) = word_delete(key) {
         return action;
     }

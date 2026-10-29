@@ -12,6 +12,7 @@
 pub mod commands;
 pub mod complete;
 pub mod dispatch;
+pub mod lsp;
 pub mod mode;
 pub mod session;
 pub mod state;
@@ -48,6 +49,8 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
     while !app.should_quit() {
         app.write_swaps();
         app.update_git();
+        lsp::sync(app);
+        lsp::poll(app);
         if let Some(job) = app.pending_sudo.take() {
             sudo_write(app, tui, job)?;
         }
@@ -92,6 +95,7 @@ pub fn run(app: &mut App, tui: &mut Tui) -> Result<()> {
             _ => {}
         }
     }
+    lsp::shutdown(app);
     app.history.save();
     if app.config.restore_session && !app.startup.no_session && !app.startup.clean {
         // A session that cannot be written is not worth an error on the way
@@ -143,12 +147,14 @@ fn handle_key(app: &mut App, input: &mut Input, key: crossterm::event::KeyEvent)
         input.set_mappings(app.mappings.clone());
     }
     input.recording = app.macro_recording.is_some();
+    input.menu_open = app.lsp.menu.is_some() && app.mode.is_insert();
     let action = input.handle(key, app.mode);
     dispatch::apply(app, action)?;
     // A mapping, or a sequence that turned out not to be one, can leave keys
     // to handle after the first.
     while let Some((queued, unmapped)) = input.take_replay() {
         input.recording = app.macro_recording.is_some();
+        input.menu_open = app.lsp.menu.is_some() && app.mode.is_insert();
         let action = input.handle_queued(queued, unmapped, app.mode);
         dispatch::apply(app, action)?;
     }

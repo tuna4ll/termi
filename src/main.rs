@@ -16,6 +16,7 @@ mod editor;
 mod filesystem;
 mod git;
 mod input;
+mod lsp;
 mod picker;
 mod renderer;
 mod search;
